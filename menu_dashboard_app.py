@@ -12,13 +12,11 @@ st.markdown("주력 메뉴의 판매 비중, 세트 vs 단품, 사이드 메뉴,
 def get_target_chicken(menu):
     m = str(menu).replace(' ', '').replace('℃', '도')
     
-    # 170도 시리즈 (마늘간장이 간장보다 위에 있어야 먼저 인식됨)
     if '170도후라이드' in m: return '170도후라이드'
     elif '170도양념' in m: return '170도양념치킨'
     elif '170도마늘간장' in m: return '170도마늘간장치킨'
     elif '170도간장' in m: return '170도간장치킨'
     
-    # 꾸브 시리즈 
     if '저당양념' in m: return '저당양념꾸브'
     elif '양념꾸브' in m: return '양념꾸브'
     elif '트러플' in m: return '트러플꾸브'
@@ -33,33 +31,39 @@ def get_menu_type(raw_menu):
     m = str(raw_menu)
     m_no_space = m.replace(' ', '')
     
-    # 1. 명확한 순살 변경 옵션들 분류 (수량/매출 역산을 위해 따로 보관)
-    if m_no_space in ['-순살', '+순살', '-순살변경', '+순살변경']: 
-        return '단품순살옵션'
-    if '메뉴1순살' in m_no_space or '메뉴2순살' in m_no_space:
-        return '세트순살옵션'
-        
-    # 2. 기타 배달비/포장 등 허수 데이터 제외
-    if m.startswith('-') or m.startswith('+') or '배달' in m or m_no_space in ['포장', '홀매출', '한마리포장', '두마리세트포장']:
+    # 1. 예외처리: 순살 변경 '안함'은 뼈에 그대로 남아야 하므로 허수(기타) 취급
+    if '안함' in m_no_space:
         return '제외(기타)'
         
-    # 3. 두마리 세트만 세트로 인정
+    # 2. 명확한 순살 변경 옵션들 (단품 / 세트)
+    if m.startswith('-') or m.startswith('+') or '순살추가' in m_no_space or '순살변경' in m_no_space:
+        if '순살' in m_no_space:
+            if '메뉴1' in m_no_space or '메뉴2' in m_no_space:
+                return '세트순살옵션'
+            else:
+                return '단품순살옵션'
+        else:
+            return '제외(기타)'
+            
+    # 나머지 허수 데이터 제외
+    if '배달' in m or '포장' in m_no_space or '홀매출' in m_no_space:
+        return '제외(기타)'
+        
+    # 3. 본 품목 분류 (세트 vs 단품 vs 사이드)
     if '두마리' in m_no_space and '세트' in m_no_space:
         return '세트'
         
-    # 4. 치킨 이름이 들어간 단품 우선 분류
-    if any(k in m for k in ['꾸브', '후라이드', '치킨', '반반']):
-        return '단품'
-        
-    # 5. 사이드 분류
     if any(k in m for k in ['사리', '똥집', '치즈볼', '음료', '콜라', '사이다', '튀김', '밥', '햇반', '감자', '떡', '소스', '무', '우동']):
         return '사이드'
         
     return '단품'
 
 def get_bone_type(raw_menu, menu_type):
+    m_no_space = str(raw_menu).replace(' ', '')
     if menu_type in ['세트', '단품']:
-        if '순살' in str(raw_menu):
+        if '안함' in m_no_space:
+            return '뼈'
+        elif '순살' in m_no_space:
             return '순살'
         else:
             return '뼈'
