@@ -17,7 +17,6 @@ st.title("꾸브라꼬 매출 대시보드")
 DOWNLOADS_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 FILE_PATTERN = "*기간별_매출분석*.xlsx"  # 파일명 패턴이 바뀌면 이 부분만 수정
 
-# 다운로드 폴더가 실제로 존재하는지 확인 (내 PC에서는 True, 웹 서버에서는 False)
 is_local_pc = os.path.exists(DOWNLOADS_DIR)
 auto_file_path = None
 
@@ -46,7 +45,7 @@ else:
     st.warning("위에서 분석할 엑셀 파일을 직접 업로드해주세요.")
 
 # -------------------
-# 데이터 처리 로직 (기존과 동일)
+# 데이터 처리 로직 
 # -------------------
 def find_header_row(file, max_scan_rows=5, key_word="매장명"):
     raw = pd.read_excel(file, header=None, nrows=max_scan_rows)
@@ -72,7 +71,6 @@ def get_region(store):
     return "기타"
 
 def get_area(region):
-    # 수도권 = 서울/경기/인천 + 대전/강원/충청 통합
     if region in ["서울", "경기", "인천", "대전", "강원", "충청(충남/충북)"]:
         return "수도권"
     if region in ["부산", "울산", "대구", "경상(경남/경북)"]:
@@ -87,23 +85,23 @@ WON_FORMAT = "%,d 원"
 
 if file_source is not None:
     try:
-        # -------------------
-        # 헤더 자동 감지
-        # -------------------
         header_row_idx = find_header_row(file_source)
         if hasattr(file_source, "seek"):
-            file_source.seek(0)  # 업로드된 파일(스트림)인 경우에만 커서 되돌리기
+            file_source.seek(0)
         df = pd.read_excel(file_source, header=header_row_idx)
-        st.success(f"엑셀 로딩 완료 (헤더 인식: {header_row_idx + 1}번째 행)")
+        
+        # --- [추가된 부분] 영업일수 입력 받기 ---
+        st.markdown("---")
+        st.subheader("📅 분석 기준 설정")
+        analysis_days = st.number_input(
+            "업로드한 엑셀 파일의 데이터 기간은 며칠인가요? (일 평균 및 월 예상 매출 계산에 사용됩니다)", 
+            min_value=1, value=30, step=1, 
+            help="예: 1주일치 데이터라면 7, 한달치 데이터라면 30을 입력하세요."
+        )
+        st.markdown("---")
 
         data = df.copy()
 
-        with st.expander("인식된 컬럼 보기"):
-            st.write(list(data.columns))
-
-        # -------------------
-        # 매장명 컬럼 찾기
-        # -------------------
         store_col = None
         for col in data.columns:
             if "매장명" in str(col):
@@ -114,102 +112,82 @@ if file_source is not None:
             st.error("매장명 컬럼을 찾지 못했습니다.")
             st.stop()
 
-        # -------------------
-        # 합계 행 등 제거
-        # -------------------
         data = data.dropna(subset=[store_col])
         data[store_col] = data[store_col].astype(str).str.strip()
         data = data[~data[store_col].isin(["합계", "소계", "총계", ""])]
         data = data[~data[store_col].str.contains("합계|소계|총계", na=False)]
 
-        # -------------------
-        # 필수 컬럼 확인
-        # -------------------
         required_cols = ["판매금액", "채널배달료(매출제외)"]
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             st.error(f"다음 컬럼을 찾지 못했습니다 : {missing}")
             st.stop()
 
-        # -------------------
-        # 실제매출 계산
-        # -------------------
         data["판매금액"] = pd.to_numeric(data["판매금액"], errors="coerce").fillna(0)
         data["채널배달료(매출제외)"] = pd.to_numeric(data["채널배달료(매출제외)"], errors="coerce").fillna(0)
         data["실제매출"] = data["판매금액"] - data["채널배달료(매출제외)"]
 
-        # -------------------
-        # 지역/권역
-        # -------------------
         data["지역"] = data[store_col].apply(get_region)
         data["권역"] = data["지역"].apply(get_area)
 
         # -------------------
-        # 총매출
-        # -------------------
-        total_sales = data["실제매출"].sum()
-        st.metric("전국 총매출", f"{total_sales:,.0f} 원")
-
-        # -------------------
-        # 매장별 매출 합산
+        # 1. 매장별 매출 합산 및 일평균/월예상 계산
         # -------------------
         store_sales = (
             data.groupby([store_col, "지역", "권역"], as_index=False)["실제매출"]
             .sum()
             .sort_values("실제매출", ascending=False)
         )
+        
+        store_sales["일평균매출"] = store_sales["실제매출"] / analysis_days
+        store_sales["월예상매출"] = store_sales["일평균매출"] * 30
+
+        total_sales = store_sales["실제매출"].sum()
+        total_daily_avg = total_sales / analysis_days
+        total_monthly_est = total_daily_avg * 30
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("전국 총매출", f"{total_sales:,.0f} 원")
+        col2.metric("전국 일 평균 매출", f"{total_daily_avg:,.0f} 원")
+        col3.metric("전국 월 예상 매출", f"{total_monthly_est:,.0f} 원")
 
         # -------------------
-        # TOP10
+        # 매장 TOP10 / 하위 10
         # -------------------
         st.header("전국 TOP10 매장")
-
         top10 = store_sales.head(10)
-
         st.dataframe(
             top10,
             use_container_width=True,
             column_config={
-                "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT)
+                "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT),
+                "일평균매출": st.column_config.NumberColumn("일평균매출", format=WON_FORMAT),
+                "월예상매출": st.column_config.NumberColumn("월예상매출 (30일 기준)", format=WON_FORMAT)
             }
         )
 
-        fig_top10 = px.bar(top10, x=store_col, y="실제매출", title="전국 TOP10 매장")
-        fig_top10.update_traces(marker_color="green")
-        fig_top10.update_yaxes(tickformat=",.0f")
-        st.plotly_chart(fig_top10, use_container_width=True)
-
-        # -------------------
-        # 하위 10개 매장
-        # -------------------
         st.header("🔴 하위 10개 매장")
-
         bottom10 = store_sales.tail(10)
-
         st.dataframe(
             bottom10,
             use_container_width=True,
             column_config={
-                "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT)
+                "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT),
+                "일평균매출": st.column_config.NumberColumn("일평균매출", format=WON_FORMAT),
+                "월예상매출": st.column_config.NumberColumn("월예상매출 (30일 기준)", format=WON_FORMAT)
             }
         )
 
-        fig_bottom10 = px.bar(bottom10, x=store_col, y="실제매출", title="하위 10개 매장")
-        fig_bottom10.update_traces(marker_color="red")
-        fig_bottom10.update_yaxes(tickformat=",.0f")
-        st.plotly_chart(fig_bottom10, use_container_width=True)
-
         # -------------------
-        # 권역별 매출
+        # 2. 권역별 매출 및 일평균/월예상 계산
         # -------------------
         st.header("권역별 매출")
 
         area_sales = (
-            data.groupby("권역")["실제매출"].sum().reset_index()
+            store_sales.groupby("권역")[["실제매출", "일평균매출", "월예상매출"]].sum().reset_index()
             .sort_values("실제매출", ascending=False)
         )
 
-        # 권역별 지점수 계산 (매장 기준 store_sales에서 카운트)
         area_store_count = (
             store_sales.groupby("권역")[store_col].count()
             .reset_index()
@@ -218,21 +196,21 @@ if file_source is not None:
 
         area_sales = area_sales.merge(area_store_count, on="권역")
 
-        total_sales_for_pct = area_sales["실제매출"].sum()
         total_store_count = area_sales["지점수"].sum()
-
         area_sales["지점비율(%)"] = area_sales["지점수"] / total_store_count * 100
-        area_sales["매출비율(%)"] = area_sales["실제매출"] / total_sales_for_pct * 100
+        area_sales["매출비율(%)"] = area_sales["실제매출"] / total_sales * 100
 
-        area_sales = area_sales[["권역", "지점수", "지점비율(%)", "실제매출", "매출비율(%)"]]
+        # 컬럼 순서 정리
+        area_sales = area_sales[["권역", "지점수", "지점비율(%)", "실제매출", "매출비율(%)", "일평균매출", "월예상매출"]]
 
-        # 합계 행 추가 (표 전용, 그래프에는 포함하지 않음)
         total_row = pd.DataFrame({
             "권역": ["합계"],
             "지점수": [total_store_count],
             "지점비율(%)": [100.0],
-            "실제매출": [total_sales_for_pct],
+            "실제매출": [total_sales],
             "매출비율(%)": [100.0],
+            "일평균매출": [total_daily_avg],
+            "월예상매출": [total_monthly_est]
         })
         area_sales_display = pd.concat([area_sales, total_row], ignore_index=True)
 
@@ -249,34 +227,20 @@ if file_source is not None:
                 "지점비율(%)": "{:.1f}%",
                 "실제매출": "{:,.0f} 원",
                 "매출비율(%)": "{:.1f}%",
+                "일평균매출": "{:,.0f} 원",
+                "월예상매출": "{:,.0f} 원"
             })
         )
 
         st.dataframe(styled_area, use_container_width=True)
 
-        fig_area = px.bar(area_sales, x="권역", y="실제매출", title="권역별 매출")
-        fig_area.update_yaxes(tickformat=",.0f")
-        st.plotly_chart(fig_area, use_container_width=True)
-
-        if (area_sales["권역"] == "기타(미분류)").any():
-            st.warning("권역 미분류 매장이 있습니다. 아래 '지역 미분류 매장 목록'을 확인해주세요.")
-
         # -------------------
-        # 권역별 매출 비중 (파이차트)
-        # -------------------
-        st.subheader("권역별 매출 비중")
-
-        fig_pie = px.pie(area_sales, names="권역", values="실제매출", hole=0.4)
-        fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-        # -------------------
-        # 지역별 매출
+        # 3. 지역별 매출 및 일평균/월예상 계산
         # -------------------
         st.header("지역별 매출")
 
         region_sales = (
-            data.groupby("지역")["실제매출"].sum().reset_index()
+            store_sales.groupby("지역")[["실제매출", "일평균매출", "월예상매출"]].sum().reset_index()
             .sort_values("실제매출", ascending=False)
         )
 
@@ -284,24 +248,16 @@ if file_source is not None:
             region_sales,
             use_container_width=True,
             column_config={
-                "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT)
+                "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT),
+                "일평균매출": st.column_config.NumberColumn("일평균매출", format=WON_FORMAT),
+                "월예상매출": st.column_config.NumberColumn("월예상매출", format=WON_FORMAT)
             }
         )
-
-        fig_region = px.bar(region_sales, x="지역", y="실제매출", title="지역별 매출")
-        fig_region.update_yaxes(tickformat=",.0f")
-        st.plotly_chart(fig_region, use_container_width=True)
-
-        unclassified = data[data["지역"] == "기타"][store_col].unique()
-        if len(unclassified) > 0:
-            with st.expander(f"⚠ 지역 미분류 매장 목록 ({len(unclassified)}개)"):
-                st.write(list(unclassified))
 
         # -------------------
         # 매장 검색
         # -------------------
         st.header("🔍 매장 검색")
-
         col1, col2 = st.columns(2)
 
         with col1:
@@ -328,7 +284,9 @@ if file_source is not None:
             use_container_width=True,
             height=700,
             column_config={
-                "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT)
+                "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT),
+                "일평균매출": st.column_config.NumberColumn("일평균매출", format=WON_FORMAT),
+                "월예상매출": st.column_config.NumberColumn("월예상매출 (30일 기준)", format=WON_FORMAT)
             }
         )
 
