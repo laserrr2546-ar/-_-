@@ -44,8 +44,8 @@ if uploaded_file is not None:
         # 포장 컬럼 이름 변경
         df = df.rename(columns={'건수.3': '포장건수', '실 매출액.3': '포장매출액'})
         
-        # 결측치 및 합계 행 제거
-        data = df.dropna(subset=['매장명', '주문채널 상세']).copy()
+        # 결측치 및 합계 행 제거 (주문채널 대분류, 소분류 모두 체크)
+        data = df.dropna(subset=['매장명', '주문채널', '주문채널 상세']).copy()
         data = data[data['매장명'] != '합계']
         data = data[data['주문구분'] != '합계']
         
@@ -68,6 +68,15 @@ if uploaded_file is not None:
             ["전체 매장 요약"] + store_list
         )
         
+        # ✨ 새로 추가된 조회 기준 선택 스위치
+        st.markdown("<br>", unsafe_allow_html=True)
+        view_type = st.radio(
+            "📊 플랫폼 분석 기준 선택", 
+            ["주문채널 (대분류 - 예: 배달의민족, 포스, 요기요 등)", "주문채널 상세 (소분류 - 예: 배민배달, MATE 태블릿 등)"], 
+            horizontal=True
+        )
+        target_col = '주문채널 상세' if '상세' in view_type else '주문채널'
+
         if selected_store == "전체 매장 요약":
             st.subheader("🏢 전국 매장 플랫폼 전체 요약 데이터")
             f_data = data.copy()
@@ -108,17 +117,19 @@ if uploaded_file is not None:
             st.plotly_chart(fig2, use_container_width=True)
             
         with cc3:
-            channel_pie = f_data.groupby('주문채널 상세')['실 매출액'].sum().reset_index()
+            # 선택한 대/소분류 기준에 따라 차트 자동 변경
+            channel_pie = f_data.groupby(target_col)['실 매출액'].sum().reset_index()
             channel_pie = channel_pie[channel_pie['실 매출액'] > 0]
-            fig3 = px.pie(channel_pie, names='주문채널 상세', values='실 매출액', title="🛵 플랫폼(채널)별 점유율", hole=0.3)
+            fig3 = px.pie(channel_pie, names=target_col, values='실 매출액', title="🛵 플랫폼 점유율", hole=0.3)
             fig3.update_traces(textposition="inside", textinfo="percent+label")
             st.plotly_chart(fig3, use_container_width=True)
 
-        # ✨ 새로 추가된 부분: 플랫폼별 상세 표(Table)
-        st.markdown("#### 📊 플랫폼(채널)별 상세 내역 표")
-        channel_detail = f_data.groupby('주문채널 상세')[['건수', '실 매출액']].sum().reset_index()
+        st.markdown(f"#### 📊 {target_col}별 상세 내역 표")
+        
+        # 선택한 대/소분류 기준에 따라 표 자동 변경
+        channel_detail = f_data.groupby(target_col)[['건수', '실 매출액']].sum().reset_index()
         channel_detail = channel_detail.sort_values('실 매출액', ascending=False)
-        channel_detail = channel_detail[channel_detail['실 매출액'] > 0] # 매출이 0인 플랫폼은 표에서 숨김
+        channel_detail = channel_detail[channel_detail['실 매출액'] > 0]
         
         if tot_sales > 0:
             channel_detail['매출비중(%)'] = (channel_detail['실 매출액'] / tot_sales * 100).round(1)
@@ -127,7 +138,7 @@ if uploaded_file is not None:
             
         st.dataframe(channel_detail, use_container_width=True, hide_index=True,
                      column_config={
-                         "주문채널 상세": "플랫폼(채널)명",
+                         target_col: "플랫폼(채널)명",
                          "건수": st.column_config.NumberColumn("주문 건수", format="%,d 건"),
                          "매출비중(%)": st.column_config.NumberColumn("비율", format="%.1f %%"),
                          "실 매출액": st.column_config.NumberColumn("실 매출액", format="%,d 원")
@@ -152,8 +163,10 @@ if uploaded_file is not None:
         store_group['포장비율(%)'] = (store_group['포장매출액'] / store_group['총매출액'] * 100).fillna(0).round(1)
         store_group['온라인비율(%)'] = (store_group['온라인매출'] / store_group['총매출액'] * 100).fillna(0).round(1)
         
-        top_plat = data.sort_values(['매장명', '실 매출액'], ascending=[True, False]).drop_duplicates('매장명')[['매장명', '주문채널 상세']]
-        top_plat = top_plat.rename(columns={'주문채널 상세': '1위플랫폼'})
+        # 선택한 기준(주문채널 or 주문채널 상세)에 맞춰서 매장별 1위 플랫폼 계산
+        agg_plat = data.groupby(['매장명', target_col])['실 매출액'].sum().reset_index()
+        top_plat = agg_plat.sort_values(['매장명', '실 매출액'], ascending=[True, False]).drop_duplicates('매장명')[['매장명', target_col]]
+        top_plat = top_plat.rename(columns={target_col: '1위플랫폼'})
         
         store_group = store_group.merge(top_plat, on='매장명', how='left')
         
