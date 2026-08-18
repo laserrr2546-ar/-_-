@@ -121,7 +121,6 @@ if file_source is not None:
         
         has_date_col = "일자" in data.columns
         if has_date_col:
-            # 빈 일자 제거 및 전체 기간의 총 날짜 수 계산
             data = data.dropna(subset=["일자"])
             detected_days = data["일자"].nunique()
             st.success(f"엑셀 파일에서 총 **{detected_days}일** 치의 데이터를 자동으로 감지했습니다.")
@@ -144,7 +143,7 @@ if file_source is not None:
         data["권역"] = data["지역"].apply(get_area)
 
         # -------------------
-        # 1. 매장별 매출 합산 및 일평균/월예상 계산
+        # 매장별 매출 합산 및 일평균/월예상 계산
         # -------------------
         store_sales = (
             data.groupby([store_col, "지역", "권역"], as_index=False)["실제매출"]
@@ -153,7 +152,6 @@ if file_source is not None:
         )
         
         if has_date_col:
-            # 매장별로 실제 매출이 일어난 날(일자)을 카운트하여 '영업일수'로 산정
             open_days_df = data[data["실제매출"] > 0].groupby(store_col)["일자"].nunique().reset_index()
             open_days_df.rename(columns={"일자": "영업일수"}, inplace=True)
             store_sales = store_sales.merge(open_days_df, on=store_col, how="left")
@@ -161,11 +159,9 @@ if file_source is not None:
         else:
             store_sales["영업일수"] = analysis_days
             
-        # 휴무일수 = 총 기간 - 영업일수 (마이너스가 나오지 않도록 방어)
         store_sales["휴무일수"] = analysis_days - store_sales["영업일수"]
         store_sales["휴무일수"] = store_sales["휴무일수"].apply(lambda x: x if x > 0 else 0)
         
-        # '진짜' 일평균매출 계산 (휴무일을 제외하고 실제로 영업한 날짜로만 나눔)
         store_sales["일평균매출"] = store_sales.apply(
             lambda x: x["실제매출"] / x["영업일수"] if x["영업일수"] > 0 else 0, axis=1
         )
@@ -181,9 +177,9 @@ if file_source is not None:
         col3.metric("전국 월 예상 매출", f"{total_monthly_est:,.0f} 원")
 
         # -------------------
-        # 매장 TOP10 / 하위 10
+        # 전국 TOP10 매장
         # -------------------
-        st.header("전국 TOP10 매장")
+        st.header("🏆 전국 TOP10 매장")
         top10 = store_sales.head(10)
         st.dataframe(
             top10,
@@ -196,11 +192,23 @@ if file_source is not None:
                 "월예상매출": st.column_config.NumberColumn("월예상매출 (30일 기준)", format=WON_FORMAT)
             }
         )
+        
+        fig_top10 = px.bar(top10, x=store_col, y="실제매출", title="전국 TOP10 매장 매출액")
+        fig_top10.update_traces(marker_color="green")
+        fig_top10.update_yaxes(tickformat=",.0f")
+        st.plotly_chart(fig_top10, use_container_width=True)
 
-        st.header("🔴 하위 10개 매장")
-        bottom10 = store_sales.tail(10)
+        # -------------------
+        # ✨ 새로 수정된 부분: 휴무일 많은 매장 TOP 10 
+        # -------------------
+        st.header("💤 휴무일 많은 매장 TOP 10")
+        st.caption("※ 분석 기간 내에 문을 닫은 일수가 가장 많은 매장 순위입니다. (휴무일수가 같을 경우 총매출이 낮은 순으로 정렬)")
+        
+        # 휴무일 기준 내림차순(많은순), 매출액 기준 오름차순(낮은순)으로 정렬
+        top_holiday10 = store_sales.sort_values(by=["휴무일수", "실제매출"], ascending=[False, True]).head(10)
+        
         st.dataframe(
-            bottom10,
+            top_holiday10,
             use_container_width=True,
             column_config={
                 "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT),
@@ -211,8 +219,12 @@ if file_source is not None:
             }
         )
 
+        fig_holiday10 = px.bar(top_holiday10, x=store_col, y="휴무일수", title="매장별 휴무일수 비교 (일)")
+        fig_holiday10.update_traces(marker_color="orange")
+        st.plotly_chart(fig_holiday10, use_container_width=True)
+
         # -------------------
-        # 2. 권역별 매출 및 일평균/월예상 계산
+        # 권역별 매출
         # -------------------
         st.header("권역별 매출")
 
@@ -267,7 +279,7 @@ if file_source is not None:
         st.dataframe(styled_area, use_container_width=True)
 
         # -------------------
-        # 3. 지역별 매출 및 일평균/월예상 계산
+        # 지역별 매출
         # -------------------
         st.header("지역별 매출")
 
@@ -311,7 +323,6 @@ if file_source is not None:
                 filtered[store_col].str.contains(keyword, case=False, na=False)
             ]
 
-        # 정렬 기준을 실제매출순으로 지정
         filtered = filtered.sort_values("실제매출", ascending=False)
 
         st.dataframe(
