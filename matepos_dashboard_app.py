@@ -15,7 +15,7 @@ st.title("꾸브라꼬 매출 대시보드")
 # 내 PC(로컬)인지 웹 서버인지 감지하여 똑똑하게 동작하기
 # -------------------
 DOWNLOADS_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
-FILE_PATTERN = "*기간별_매출분석*.xlsx"  # 파일명 패턴이 바뀌면 이 부분만 수정
+FILE_PATTERN = "*기간별_매출분석*.xlsx"  
 
 is_local_pc = os.path.exists(DOWNLOADS_DIR)
 auto_file_path = None
@@ -90,16 +90,6 @@ if file_source is not None:
             file_source.seek(0)
         df = pd.read_excel(file_source, header=header_row_idx)
         
-        # --- [추가된 부분] 영업일수 입력 받기 ---
-        st.markdown("---")
-        st.subheader("📅 분석 기준 설정")
-        analysis_days = st.number_input(
-            "업로드한 엑셀 파일의 데이터 기간은 며칠인가요? (일 평균 및 월 예상 매출 계산에 사용됩니다)", 
-            min_value=1, value=30, step=1, 
-            help="예: 1주일치 데이터라면 7, 한달치 데이터라면 30을 입력하세요."
-        )
-        st.markdown("---")
-
         data = df.copy()
 
         store_col = None
@@ -123,6 +113,29 @@ if file_source is not None:
             st.error(f"다음 컬럼을 찾지 못했습니다 : {missing}")
             st.stop()
 
+        # -------------------
+        # 분석일수 / 영업일 / 휴무일 자동 계산
+        # -------------------
+        st.markdown("---")
+        st.subheader("📅 분석 기간 및 영업일 자동 분석")
+        
+        has_date_col = "일자" in data.columns
+        if has_date_col:
+            # 빈 일자 제거 및 전체 기간의 총 날짜 수 계산
+            data = data.dropna(subset=["일자"])
+            detected_days = data["일자"].nunique()
+            st.success(f"엑셀 파일에서 총 **{detected_days}일** 치의 데이터를 자동으로 감지했습니다.")
+        else:
+            detected_days = 30
+            st.warning("'일자' 컬럼이 없어 휴무일을 계산할 수 없습니다. 기본 30일로 세팅됩니다.")
+            
+        analysis_days = st.number_input(
+            "총 분석 기간(일수)을 확인하거나 수정해주세요.", 
+            min_value=1, value=int(detected_days), step=1, 
+            help="해당 기간을 바탕으로 각 매장의 휴무일(기간 내 매출이 없는 날)이 계산됩니다."
+        )
+        st.markdown("---")
+
         data["판매금액"] = pd.to_numeric(data["판매금액"], errors="coerce").fillna(0)
         data["채널배달료(매출제외)"] = pd.to_numeric(data["채널배달료(매출제외)"], errors="coerce").fillna(0)
         data["실제매출"] = data["판매금액"] - data["채널배달료(매출제외)"]
@@ -139,16 +152,32 @@ if file_source is not None:
             .sort_values("실제매출", ascending=False)
         )
         
-        store_sales["일평균매출"] = store_sales["실제매출"] / analysis_days
+        if has_date_col:
+            # 매장별로 실제 매출이 일어난 날(일자)을 카운트하여 '영업일수'로 산정
+            open_days_df = data[data["실제매출"] > 0].groupby(store_col)["일자"].nunique().reset_index()
+            open_days_df.rename(columns={"일자": "영업일수"}, inplace=True)
+            store_sales = store_sales.merge(open_days_df, on=store_col, how="left")
+            store_sales["영업일수"] = store_sales["영업일수"].fillna(0)
+        else:
+            store_sales["영업일수"] = analysis_days
+            
+        # 휴무일수 = 총 기간 - 영업일수 (마이너스가 나오지 않도록 방어)
+        store_sales["휴무일수"] = analysis_days - store_sales["영업일수"]
+        store_sales["휴무일수"] = store_sales["휴무일수"].apply(lambda x: x if x > 0 else 0)
+        
+        # '진짜' 일평균매출 계산 (휴무일을 제외하고 실제로 영업한 날짜로만 나눔)
+        store_sales["일평균매출"] = store_sales.apply(
+            lambda x: x["실제매출"] / x["영업일수"] if x["영업일수"] > 0 else 0, axis=1
+        )
         store_sales["월예상매출"] = store_sales["일평균매출"] * 30
 
         total_sales = store_sales["실제매출"].sum()
-        total_daily_avg = total_sales / analysis_days
-        total_monthly_est = total_daily_avg * 30
+        total_daily_avg = store_sales["일평균매출"].sum()
+        total_monthly_est = store_sales["월예상매출"].sum()
 
         col1, col2, col3 = st.columns(3)
         col1.metric("전국 총매출", f"{total_sales:,.0f} 원")
-        col2.metric("전국 일 평균 매출", f"{total_daily_avg:,.0f} 원")
+        col2.metric("전국 일 평균 매출(영업일 기준 합산)", f"{total_daily_avg:,.0f} 원")
         col3.metric("전국 월 예상 매출", f"{total_monthly_est:,.0f} 원")
 
         # -------------------
@@ -161,6 +190,8 @@ if file_source is not None:
             use_container_width=True,
             column_config={
                 "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT),
+                "영업일수": st.column_config.NumberColumn("영업일수", format="%d 일"),
+                "휴무일수": st.column_config.NumberColumn("휴무일수", format="%d 일"),
                 "일평균매출": st.column_config.NumberColumn("일평균매출", format=WON_FORMAT),
                 "월예상매출": st.column_config.NumberColumn("월예상매출 (30일 기준)", format=WON_FORMAT)
             }
@@ -173,6 +204,8 @@ if file_source is not None:
             use_container_width=True,
             column_config={
                 "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT),
+                "영업일수": st.column_config.NumberColumn("영업일수", format="%d 일"),
+                "휴무일수": st.column_config.NumberColumn("휴무일수", format="%d 일"),
                 "일평균매출": st.column_config.NumberColumn("일평균매출", format=WON_FORMAT),
                 "월예상매출": st.column_config.NumberColumn("월예상매출 (30일 기준)", format=WON_FORMAT)
             }
@@ -200,7 +233,6 @@ if file_source is not None:
         area_sales["지점비율(%)"] = area_sales["지점수"] / total_store_count * 100
         area_sales["매출비율(%)"] = area_sales["실제매출"] / total_sales * 100
 
-        # 컬럼 순서 정리
         area_sales = area_sales[["권역", "지점수", "지점비율(%)", "실제매출", "매출비율(%)", "일평균매출", "월예상매출"]]
 
         total_row = pd.DataFrame({
@@ -279,12 +311,17 @@ if file_source is not None:
                 filtered[store_col].str.contains(keyword, case=False, na=False)
             ]
 
+        # 정렬 기준을 실제매출순으로 지정
+        filtered = filtered.sort_values("실제매출", ascending=False)
+
         st.dataframe(
             filtered,
             use_container_width=True,
             height=700,
             column_config={
                 "실제매출": st.column_config.NumberColumn("실제매출", format=WON_FORMAT),
+                "영업일수": st.column_config.NumberColumn("영업일수", format="%d 일"),
+                "휴무일수": st.column_config.NumberColumn("휴무일수", format="%d 일"),
                 "일평균매출": st.column_config.NumberColumn("일평균매출", format=WON_FORMAT),
                 "월예상매출": st.column_config.NumberColumn("월예상매출 (30일 기준)", format=WON_FORMAT)
             }
