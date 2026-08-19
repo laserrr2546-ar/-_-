@@ -47,7 +47,7 @@ else:
     st.warning("위에서 분석할 엑셀 파일을 직접 업로드해주세요.")
 
 # -------------------
-# 데이터 전처리 함수
+# 데이터 전처리 및 공통 함수
 # -------------------
 WON_FORMAT = "%,d 원"
 
@@ -60,12 +60,64 @@ def get_summary_item(items):
     else:
         return f"{unique_items[0]} 外 {len(unique_items)-1}건"
 
+# ★ 엑셀의 '소계(부분합)' 형태를 똑같이 만들어주는 특수 함수 ★
+def create_subtotal_table(df, is_sales=True):
+    qty_col = '입고'
+    price_col = '매출단가' if is_sales else '매입단가'
+    total_col = '매출금' if is_sales else '매입금'
+    
+    agg_dict = {
+        qty_col: 'sum',
+        price_col: 'mean', # 단가는 평균으로 표기
+        total_col: 'sum'
+    }
+    if is_sales:
+        agg_dict['이익금'] = 'sum'
+        
+    # 1차 그룹화
+    grouped = df.groupby(['제조사(매입처)', '품목', '규격'], dropna=False).agg(agg_dict).reset_index()
+    # 정렬: 매입처 가나다순 -> 금액 큰 순
+    grouped.sort_values(by=['제조사(매입처)', total_col], ascending=[True, False], inplace=True)
+    
+    final_data = []
+    
+    # 매입처별로 순회하며 소계 행 삽입
+    for maker, group in grouped.groupby('제조사(매입처)', sort=False):
+        for _, row in group.iterrows():
+            final_data.append(row.to_dict())
+        
+        # '소계' 행 생성
+        subtotal = {
+            '제조사(매입처)': maker,
+            '품목': f"▶ {maker} 소계",
+            '규격': "",
+            qty_col: group[qty_col].sum(),
+            price_col: None, # 소계 줄에서는 단가를 비워둠
+            total_col: group[total_col].sum()
+        }
+        if is_sales:
+            subtotal['이익금'] = group['이익금'].sum()
+        
+        final_data.append(subtotal)
+        
+    res_df = pd.DataFrame(final_data)
+    
+    # 출력용 컬럼명 변경
+    rename_dict = {
+        '제조사(매입처)': '매입처',
+        qty_col: '수량',
+        price_col: '단가',
+        total_col: '총금액'
+    }
+    res_df.rename(columns=rename_dict, inplace=True)
+    return res_df
+
+
 if file_source is not None:
     try:
         if hasattr(file_source, "seek"):
             file_source.seek(0)
             
-        # 헤더 자동 감지
         df_test = pd.read_excel(file_source, nrows=5)
         if hasattr(file_source, "seek"):
             file_source.seek(0)
@@ -81,31 +133,24 @@ if file_source is not None:
             st.error(f"다음 필수 컬럼을 찾지 못했습니다 : {missing}")
             st.stop()
 
-        # ==========================================
-        # ★ 핵심 수정: 엑셀 '셀 병합' 문제 해결 로직 ★
-        # ==========================================
-        # 1. 원본 맨 밑에 있는 '합계' 줄 제거
+        # 셀 병합 및 빈칸 전처리 로직
         if '소분류' in df.columns:
             df = df[df['소분류'] != '합계'] 
         
-        # 2. 셀 병합으로 인해 비어있는 칸(NaN)을 바로 위의 값으로 끌어내려 채우기 (Forward Fill)
         fill_cols = ['소분류', '품목', '규격', '제조사']
         for col in fill_cols:
             if col in df.columns:
                 df[col] = df[col].ffill()
                 
-        # 3. 혹시라도 원본 자체에 진짜로 비어있는 값이 있다면 기본값으로 채우기
         df['품목'] = df['품목'].fillna('품목 미상')
         df['제조사'] = df['제조사'].fillna('미상(기타)')
         df['규격'] = df['규격'].fillna('-')
 
-        # 숫자형 데이터 콤마 제거 및 형변환
         num_cols = ['입고', '매입단가', '매출단가', '매입금', '매출금', '이익금']
         for col in num_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
 
-        # 제조사 분리 로직 (엔터 기준 분리 후 금액/수량 동일값 복사)
         df['제조사_list'] = df['제조사'].astype(str).str.split('\n')
         df_exploded = df.explode('제조사_list')
         df_exploded['제조사(매입처)'] = df_exploded['제조사_list'].str.strip()
@@ -124,14 +169,11 @@ if file_source is not None:
             if sales_df.empty:
                 st.info("이 엑셀 파일에는 '매출' 데이터가 존재하지 않거나, 아직 매출액이 발생하지 않았습니다.")
             else:
+                # 상단 요약 (생략 방지)
                 report_summary = sales_df.groupby('제조사(매입처)', dropna=False).agg(
-                    품목=('품목', get_summary_item),
-                    총매입금=('매입금', 'sum'),
-                    매출수량=('입고', 'sum'),
-                    총매출금=('매출금', 'sum'),
-                    매출총이익=('이익금', 'sum')
+                    품목=('품목', get_summary_item), 총매입금=('매입금', 'sum'), 매출수량=('입고', 'sum'),
+                    총매출금=('매출금', 'sum'), 매출총이익=('이익금', 'sum')
                 ).reset_index()
-
                 report_summary['당월 이익률(%)'] = (report_summary['매출총이익'] / report_summary['총매출금'] * 100).fillna(0)
                 report_summary = report_summary[['제조사(매입처)', '품목', '매출수량', '총매입금', '총매출금', '매출총이익', '당월 이익률(%)']]
                 report_summary.sort_values(by='총매출금', ascending=False, inplace=True)
@@ -142,39 +184,42 @@ if file_source is not None:
                 with pd.ExcelWriter(output_sales, engine='openpyxl') as writer:
                     report_summary.to_excel(writer, index=False, sheet_name='매출수익 마감')
                 output_sales.seek(0)
-                st.download_button(
-                    label="📥 물류수익 마감보고서 엑셀 다운로드",
-                    data=output_sales,
-                    file_name="물류수익_마감보고서.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="sales_download"
-                )
+                st.download_button("📥 물류수익 마감보고서 엑셀 다운로드", data=output_sales, file_name="물류수익_마감보고서.xlsx", key="s_down")
 
-                total_sales = report_summary["총매출금"].sum()
-                total_profit = report_summary["매출총이익"].sum()
-                avg_margin = (total_profit / total_sales * 100) if total_sales > 0 else 0
-
+                # KPI
                 c1, c2, c3 = st.columns(3)
-                c1.metric("총 매출금", f"{total_sales:,.0f} 원")
-                c2.metric("총 이익금", f"{total_profit:,.0f} 원")
-                c3.metric("평균 이익률", f"{avg_margin:.1f} %")
+                c1.metric("총 매출금", f"{report_summary['총매출금'].sum():,.0f} 원")
+                c2.metric("총 이익금", f"{report_summary['매출총이익'].sum():,.0f} 원")
+                c3.metric("평균 이익률", f"{(report_summary['매출총이익'].sum() / report_summary['총매출금'].sum() * 100) if report_summary['총매출금'].sum()>0 else 0:.1f} %")
 
                 st.markdown("---")
-                st.markdown("#### 🏆 매출 상위 제조사 TOP 10")
-                top_sales_makers = report_summary.head(10)
-                fig_sales = px.bar(top_sales_makers, x="매입처", y="총매출금", text_auto='.2s')
+                
+                # 차트
+                fig_sales = px.bar(report_summary.head(10), x="매입처", y="총매출금", title="🏆 매출 상위 제조사 TOP 10", text_auto='.2s')
                 fig_sales.update_traces(marker_color="cornflowerblue")
                 st.plotly_chart(fig_sales, use_container_width=True)
 
-                st.markdown("#### 🥇 품목별 매출 TOP 10")
-                item_sales_df = sales_df.groupby(['품목', '규격'], dropna=False).agg(
-                    수량=('입고', 'sum'), 매출금=('매출금', 'sum'), 이익금=('이익금', 'sum')
-                ).reset_index().sort_values(by='매출금', ascending=False).head(10)
-                item_sales_df.insert(0, '순위', range(1, 11))
+                # ==========================================
+                # [매출] 상세품목 및 소계 테이블
+                # ==========================================
+                st.markdown("#### 🔍 매입처별 - 품목별 상세 매출내역 (소계 포함)")
+                st.caption("※ 각 매입처 하단에 '▶ OOO 소계' 행이 자동으로 추가되어 전체 합산을 보여줍니다.")
+                
+                sales_detail_df = create_subtotal_table(sales_df, is_sales=True)
 
+                # 스타일링: '소계'라는 글자가 들어간 행의 배경색을 노란색으로 강조
+                def highlight_subtotal(row):
+                    if "소계" in str(row['품목']):
+                        return ['background-color: #fff3b0; font-weight: bold; color: black;'] * len(row)
+                    return [''] * len(row)
+                
                 st.dataframe(
-                    item_sales_df, use_container_width=True, hide_index=True,
-                    column_config={"매출금": st.column_config.NumberColumn(format=WON_FORMAT), "이익금": st.column_config.NumberColumn(format=WON_FORMAT)}
+                    sales_detail_df.style.apply(highlight_subtotal, axis=1).format({
+                        "수량": "{:,.0f}", "단가": "{:,.0f}", "총금액": "{:,.0f}", "이익금": "{:,.0f}"
+                    }, na_rep=""),
+                    use_container_width=True,
+                    height=600,
+                    hide_index=True
                 )
 
         # ---------------------------------------------------------
@@ -187,77 +232,52 @@ if file_source is not None:
                 st.info("이 엑셀 파일에는 '매입' 데이터가 존재하지 않습니다.")
             else:
                 purchase_summary = purchase_df.groupby('제조사(매입처)', dropna=False).agg(
-                    요약품목=('품목', get_summary_item),
-                    총입고수량=('입고', 'sum'),
-                    총매입금=('매입금', 'sum')
+                    요약품목=('품목', get_summary_item), 총입고수량=('입고', 'sum'), 총매입금=('매입금', 'sum')
                 ).reset_index()
-                
                 purchase_summary.sort_values(by='총매입금', ascending=False, inplace=True)
                 purchase_summary.rename(columns={'제조사(매입처)': '매입처'}, inplace=True)
 
                 st.subheader("📑 본사 매입현황 총괄표 (전체현황)")
-                
                 output_purch = io.BytesIO()
                 with pd.ExcelWriter(output_purch, engine='openpyxl') as writer:
                     purchase_summary.to_excel(writer, index=False, sheet_name='매입현황 총괄')
                 output_purch.seek(0)
-                
-                st.download_button(
-                    label="📥 본사 매입현황 총괄표 엑셀 다운로드",
-                    data=output_purch,
-                    file_name="본사_매입현황_총괄.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="purch_download"
-                )
+                st.download_button("📥 본사 매입현황 총괄표 엑셀 다운로드", data=output_purch, file_name="본사_매입현황_총괄.xlsx", key="p_down")
 
-                st.dataframe(
-                    purchase_summary,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "총입고수량": st.column_config.NumberColumn(format="%d"),
-                        "총매입금": st.column_config.NumberColumn(format=WON_FORMAT)
-                    }
-                )
-
-                st.markdown("---")
-                total_purchase = purchase_summary["총매입금"].sum()
-                total_qty = purchase_summary["총입고수량"].sum()
-                avg_unit_price = (total_purchase / total_qty) if total_qty > 0 else 0
-
+                # KPI
                 c1, c2, c3 = st.columns(3)
-                c1.metric("총 매입금 (지출 총액)", f"{total_purchase:,.0f} 원")
-                c2.metric("총 매입(입고) 수량", f"{total_qty:,.0f} 단위")
-                c3.metric("평균 매입단가 (전체 평균)", f"{avg_unit_price:,.0f} 원")
+                c1.metric("총 매입금 (지출 총액)", f"{purchase_summary['총매입금'].sum():,.0f} 원")
+                c2.metric("총 매입(입고) 수량", f"{purchase_summary['총입고수량'].sum():,.0f} 단위")
+                c3.metric("평균 매입단가", f"{(purchase_summary['총매입금'].sum() / purchase_summary['총입고수량'].sum()) if purchase_summary['총입고수량'].sum()>0 else 0:.0f} 원")
 
                 st.markdown("---")
-                st.markdown("#### 🏢 매입 비중이 가장 높은 제조사 TOP 10")
-                top_purchase_makers = purchase_summary.head(10)
                 
-                fig_purchase = px.bar(top_purchase_makers, x="매입처", y="총매입금", text_auto='.2s')
+                # 차트
+                fig_purchase = px.bar(purchase_summary.head(10), x="매입처", y="총매입금", title="🏢 매입 비중 최고 제조사 TOP 10", text_auto='.2s')
                 fig_purchase.update_traces(marker_color="#FF6B6B") 
-                fig_purchase.update_layout(yaxis_tickformat=",.0f")
                 st.plotly_chart(fig_purchase, use_container_width=True)
 
-                st.markdown("#### 🥇 매입(지출)이 가장 많은 품목 TOP 10")
-                item_purchase_df = purchase_df.groupby(['품목', '규격'], dropna=False).agg(
-                    입고수량=('입고', 'sum'), 
-                    평균매입단가=('매입단가', 'mean'), 
-                    매입금액=('매입금', 'sum')
-                ).reset_index().sort_values(by='매입금액', ascending=False).head(10)
-                
-                item_purchase_df.insert(0, '순위', range(1, 11))
+                # ==========================================
+                # [매입] 상세품목 및 소계 테이블
+                # ==========================================
+                st.markdown("#### 🔍 매입처별 - 품목별 상세 매입내역 (소계 포함)")
+                st.caption("※ 각 매입처 하단에 '▶ OOO 소계' 행이 자동으로 추가되어 전체 합산을 보여줍니다.")
+
+                purchase_detail_df = create_subtotal_table(purchase_df, is_sales=False)
+
+                # 매입탭 소계는 연한 붉은색(핑크)으로 강조
+                def highlight_purch_subtotal(row):
+                    if "소계" in str(row['품목']):
+                        return ['background-color: #ffd6d6; font-weight: bold; color: black;'] * len(row)
+                    return [''] * len(row)
 
                 st.dataframe(
-                    item_purchase_df, 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={
-                        "순위": st.column_config.NumberColumn(format="%d위"),
-                        "입고수량": st.column_config.NumberColumn(format="%d"),
-                        "평균매입단가": st.column_config.NumberColumn(format=WON_FORMAT), 
-                        "매입금액": st.column_config.NumberColumn(format=WON_FORMAT)
-                    }
+                    purchase_detail_df.style.apply(highlight_purch_subtotal, axis=1).format({
+                        "수량": "{:,.0f}", "단가": "{:,.0f}", "총금액": "{:,.0f}"
+                    }, na_rep=""),
+                    use_container_width=True,
+                    height=600,
+                    hide_index=True
                 )
 
     except Exception as e:
