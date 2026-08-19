@@ -1,100 +1,157 @@
+import streamlit as st
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+import plotly.express as px
+import os
+import glob
 
-# 1. 원본 데이터 불러오기
-raw_file = "물류센터 매입매출현황(품목별)_20260819160343.xlsx"
-df = pd.read_excel(raw_file)
-
-# 2. 숫자 데이터 전처리 (문자열 내 콤마 제거 및 숫자로 변환)
-num_cols = ['입고', '매출단가', '매출금', '이익금']
-for col in num_cols:
-    df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-
-# 3. 유의미한 데이터 필터링 (매출금이 발생한 내역만 복사)
-df_filtered = df[df['매출금'] > 0].copy()
-
-# 4. 핵심 로직: 제조사 분리 및 값 1/n 연산
-# 엔터('\n')를 기준으로 제조사 문자열을 리스트로 쪼개기
-df_filtered['제조사_list'] = df_filtered['제조사'].astype(str).str.split('\n')
-
-# 각 행마다 묶여있는 제조사의 개수(n) 파악
-df_filtered['n'] = df_filtered['제조사_list'].apply(len)
-
-# 1/n로 수량(입고), 매출단가, 매출금, 이익금 나누기
-for col in num_cols:
-    df_filtered[col] = df_filtered[col] / df_filtered['n']
-
-# 리스트 내에 있던 제조사들을 각각 새로운 독립된 행으로 펄치기(Explode)
-df_exploded = df_filtered.explode('제조사_list')
-df_exploded['제조사'] = df_exploded['제조사_list'].str.strip() # 이름 앞뒤 공백 제거
-
-# 5. 제조사, 품목, 규격별로 그룹화 및 합산
-report_df = df_exploded.groupby(['제조사', '품목', '규격']).agg({
-    '입고': 'sum',
-    '매출단가': 'sum',
-    '매출금': 'sum',
-    '이익금': 'sum'
-}).reset_index()
-
-# 6. 보기 좋게 정렬 및 엑셀용 컬럼명 변경
-report_df.sort_values(['제조사', '품목'], inplace=True)
-report_df.rename(columns={
-    '제조사': '제조사(매입처)',
-    '품목': '품목명',
-    '규격': '규격',
-    '입고': '수량',
-    '매출단가': '매출단가(원)',
-    '매출금': '매출금(원)',
-    '이익금': '이익금(원)'
-}, inplace=True)
-
-# 7. 엑셀 파일 생성 (openpyxl을 이용해 셀 스타일 지정)
-output_file = "물류수익보고서_제조사분리_완료.xlsx"
-wb = Workbook()
-ws = wb.active
-ws.title = "수익보고서"
-
-# 데이터프레임을 엑셀 워크시트에 삽입
-for r in dataframe_to_rows(report_df, index=False, header=True):
-    ws.append(r)
-
-# --- 엑셀 디자인 (표 테두리 및 헤더 색상) ---
-header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
-header_font = Font(color="FFFFFF", bold=True)
-thin_border = Border(
-    left=Side(style='thin', color="BFBFBF"), right=Side(style='thin', color="BFBFBF"), 
-    top=Side(style='thin', color="BFBFBF"), bottom=Side(style='thin', color="BFBFBF")
+st.set_page_config(
+    page_title="물류센터 매입매출 대시보드",
+    layout="wide"
 )
 
-# 1행(헤더) 스타일 지정
-for col in range(1, len(report_df.columns) + 1):
-    cell = ws.cell(row=1, column=col)
-    cell.fill = header_fill
-    cell.font = header_font
-    cell.alignment = Alignment(horizontal='center', vertical='center')
-    cell.border = thin_border
+st.title("📦 물류센터 매입매출 및 수익 대시보드")
 
-# 본문 내용 스타일 및 숫자 콤마 천 단위 포맷 적용
-for row in range(2, ws.max_row + 1):
-    for col in range(1, ws.max_column + 1):
-        cell = ws.cell(row=row, column=col)
-        cell.border = thin_border
-        if col in [1, 2, 3]: # 텍스트 컬럼 (제조사, 품목, 규격)
-            cell.alignment = Alignment(horizontal='left', vertical='center')
-        if col in [4, 5, 6, 7]: # 숫자 컬럼 (수량, 단가, 매출금, 이익금)
-            cell.alignment = Alignment(horizontal='right', vertical='center')
-            cell.number_format = '#,##0' # 천 단위 콤마 포맷 (소수점은 반올림되어 보임)
+# -------------------
+# 내 PC(로컬)인지 웹 서버인지 감지하여 똑똑하게 동작하기
+# -------------------
+DOWNLOADS_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
+# 파일명에 '매입매출현황'이 들어가는 엑셀 파일 찾기
+FILE_PATTERN = "*매입매출현황*.xlsx"  
 
-# 셀 너비 최적화
-ws.column_dimensions['A'].width = 30 # 제조사
-ws.column_dimensions['B'].width = 40 # 품목
-ws.column_dimensions['C'].width = 15 # 규격
-ws.column_dimensions['D'].width = 10 # 수량
-ws.column_dimensions['E'].width = 15 # 매출단가
-ws.column_dimensions['F'].width = 20 # 매출금
-ws.column_dimensions['G'].width = 20 # 이익금
+is_local_pc = os.path.exists(DOWNLOADS_DIR)
+auto_file_path = None
 
-# 최종 저장
-wb.save(output_file)
+if is_local_pc:
+    def find_latest_downloaded_excel():
+        files = glob.glob(os.path.join(DOWNLOADS_DIR, FILE_PATTERN))
+        if not files:
+            return None
+        return max(files, key=os.path.getmtime)
+    
+    auto_file_path = find_latest_downloaded_excel()
+
+uploaded_file = st.file_uploader(
+    "분석할 엑셀 파일을 업로드해주세요 (내 PC에서는 다운로드 폴더 자동 감지)",
+    type=["xlsx"]
+)
+
+if uploaded_file is not None:
+    file_source = uploaded_file
+    st.info("업로드하신 파일을 사용합니다.")
+elif auto_file_path is not None:
+    file_source = auto_file_path
+    st.success(f"내 PC 다운로드 폴더에서 최신 파일을 자동으로 불러왔습니다: {os.path.basename(auto_file_path)}")
+else:
+    file_source = None
+    st.warning("위에서 분석할 엑셀 파일을 직접 업로드해주세요.")
+
+# -------------------
+# 데이터 처리 로직 
+# -------------------
+WON_FORMAT = "%,d 원"
+
+if file_source is not None:
+    try:
+        if hasattr(file_source, "seek"):
+            file_source.seek(0)
+            
+        # 데이터 불러오기
+        df = pd.read_excel(file_source)
+        
+        required_cols = ["제조사", "품목", "입고", "매출금", "이익금"]
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            st.error(f"다음 필수 컬럼을 찾지 못했습니다 : {missing}")
+            st.stop()
+
+        # 숫자 데이터 전처리 (콤마 제거)
+        num_cols = ['입고', '매출단가', '매출금', '이익금']
+        for col in num_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+        # 매출금이 있는 데이터만 필터링
+        df_filtered = df[df['매출금'] > 0].copy()
+
+        # -------------------
+        # 핵심 로직: 제조사 분리 및 1/n 연산
+        # -------------------
+        df_filtered['제조사_list'] = df_filtered['제조사'].astype(str).str.split('\n')
+        df_filtered['n'] = df_filtered['제조사_list'].apply(len)
+
+        for col in num_cols:
+            if col in df_filtered.columns:
+                df_filtered[col] = df_filtered[col] / df_filtered['n']
+
+        df_exploded = df_filtered.explode('제조사_list')
+        df_exploded['제조사(매입처)'] = df_exploded['제조사_list'].str.strip()
+
+        # 데이터 집계
+        report_df = df_exploded.groupby(['제조사(매입처)', '품목', '규격'], dropna=False).agg({
+            '입고': 'sum',
+            '매출단가': 'sum',
+            '매출금': 'sum',
+            '이익금': 'sum'
+        }).reset_index()
+
+        report_df.rename(columns={'입고': '수량'}, inplace=True)
+        report_df.sort_values(by='매출금', ascending=False, inplace=True)
+
+        # -------------------
+        # 전체 요약 지표 (KPI)
+        # -------------------
+        st.markdown("---")
+        total_sales = report_df["매출금"].sum()
+        total_profit = report_df["이익금"].sum()
+        avg_margin = (total_profit / total_sales * 100) if total_sales > 0 else 0
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("총 매출금 (분석 데이터 기준)", f"{total_sales:,.0f} 원")
+        col2.metric("총 이익금", f"{total_profit:,.0f} 원")
+        col3.metric("평균 수익률", f"{avg_margin:.1f} %")
+
+        # -------------------
+        # 제조사별 매출 TOP 10 차트
+        # -------------------
+        st.header("🏆 제조사별(매입처) 매출 TOP 10")
+        
+        maker_sales = report_df.groupby('제조사(매입처)', dropna=False)[['매출금', '이익금']].sum().reset_index()
+        maker_sales = maker_sales.sort_values('매출금', ascending=False).head(10)
+        
+        fig_maker = px.bar(maker_sales, x="제조사(매입처)", y="매출금", title="상위 10개 제조사 매출액 비교")
+        fig_maker.update_traces(marker_color="cornflowerblue")
+        fig_maker.update_yaxes(tickformat=",.0f")
+        st.plotly_chart(fig_maker, use_container_width=True)
+
+        # -------------------
+        # 데이터 검색 및 확인 (기존 표 형태 유지)
+        # -------------------
+        st.header("🔍 상세 매입/매출 내역 확인")
+        
+        col_search1, col_search2 = st.columns(2)
+        with col_search1:
+            keyword_maker = st.text_input("제조사(매입처) 검색")
+        with col_search2:
+            keyword_item = st.text_input("품목명 검색")
+
+        filtered_df = report_df.copy()
+        
+        if keyword_maker:
+            filtered_df = filtered_df[filtered_df['제조사(매입처)'].str.contains(keyword_maker, case=False, na=False)]
+        if keyword_item:
+            filtered_df = filtered_df[filtered_df['품목'].str.contains(keyword_item, case=False, na=False)]
+
+        st.dataframe(
+            filtered_df,
+            use_container_width=True,
+            height=600,
+            column_config={
+                "수량": st.column_config.NumberColumn("수량 (개/단위)", format="%d"),
+                "매출단가": st.column_config.NumberColumn("매출단가", format=WON_FORMAT),
+                "매출금": st.column_config.NumberColumn("매출금", format=WON_FORMAT),
+                "이익금": st.column_config.NumberColumn("이익금", format=WON_FORMAT)
+            }
+        )
+
+    except Exception as e:
+        st.error(f"오류 발생 : {e}")
