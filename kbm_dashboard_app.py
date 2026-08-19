@@ -15,7 +15,6 @@ st.title("📦 물류센터 매입매출 및 수익 대시보드")
 # 내 PC(로컬)인지 웹 서버인지 감지하여 똑똑하게 동작하기
 # -------------------
 DOWNLOADS_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
-# 파일명에 '매입매출현황'이 들어가는 엑셀 파일 찾기
 FILE_PATTERN = "*매입매출현황*.xlsx"  
 
 is_local_pc = os.path.exists(DOWNLOADS_DIR)
@@ -74,22 +73,16 @@ if file_source is not None:
         df_filtered = df[df['매출금'] > 0].copy()
 
         # -------------------
-        # 핵심 로직: 제조사 분리 및 1/n 연산
+        # 제조사 분리 로직 (1/n 제거, 동일값 유지)
         # -------------------
         df_filtered['제조사_list'] = df_filtered['제조사'].astype(str).str.split('\n')
-        df_filtered['n'] = df_filtered['제조사_list'].apply(len)
-
-        for col in num_cols:
-            if col in df_filtered.columns:
-                df_filtered[col] = df_filtered[col] / df_filtered['n']
-
         df_exploded = df_filtered.explode('제조사_list')
         df_exploded['제조사(매입처)'] = df_exploded['제조사_list'].str.strip()
 
-        # 데이터 집계
+        # 데이터 집계 (제조사 및 품목 기준)
         report_df = df_exploded.groupby(['제조사(매입처)', '품목', '규격'], dropna=False).agg({
             '입고': 'sum',
-            '매출단가': 'sum',
+            '매출단가': 'max', 
             '매출금': 'sum',
             '이익금': 'sum'
         }).reset_index()
@@ -111,7 +104,7 @@ if file_source is not None:
         col3.metric("평균 수익률", f"{avg_margin:.1f} %")
 
         # -------------------
-        # 제조사별 매출 TOP 10 차트
+        # 1. 제조사별 매출 TOP 10 (차트)
         # -------------------
         st.header("🏆 제조사별(매입처) 매출 TOP 10")
         
@@ -124,7 +117,42 @@ if file_source is not None:
         st.plotly_chart(fig_maker, use_container_width=True)
 
         # -------------------
-        # 데이터 검색 및 확인 (기존 표 형태 유지)
+        # 2. 품목별 매출 TOP 10 (표 - 그래프 없음)
+        # -------------------
+        st.header("🥇 품목별 매출 TOP 10")
+        st.caption("※ 전체 데이터 기준 가장 매출이 높은 상위 10개 품목입니다.")
+        
+        # 품목 단위로 재집계 (제조사 무관하게 품목과 규격으로만 묶음)
+        item_sales = df_exploded.groupby(['품목', '규격'], dropna=False).agg({
+            '입고': 'sum',
+            '매출금': 'sum',
+            '이익금': 'sum'
+        }).reset_index()
+        
+        item_sales.rename(columns={'입고': '수량'}, inplace=True)
+        item_sales = item_sales.sort_values(by='매출금', ascending=False).head(10)
+        
+        # 순위(랭킹) 컬럼 추가
+        item_sales.insert(0, '순위', range(1, 11))
+
+        st.dataframe(
+            item_sales,
+            use_container_width=True,
+            hide_index=True, # 왼쪽에 나타나는 기본 숫자 인덱스 숨기기
+            column_config={
+                "순위": st.column_config.NumberColumn("순위", format="%d위"),
+                "품목": "품목명",
+                "규격": "규격",
+                "수량": st.column_config.NumberColumn("총 수량", format="%d"),
+                "매출금": st.column_config.NumberColumn("총 매출금", format=WON_FORMAT),
+                "이익금": st.column_config.NumberColumn("총 이익금", format=WON_FORMAT)
+            }
+        )
+
+        st.markdown("---")
+
+        # -------------------
+        # 3. 데이터 검색 및 확인 (상세 내역)
         # -------------------
         st.header("🔍 상세 매입/매출 내역 확인")
         
