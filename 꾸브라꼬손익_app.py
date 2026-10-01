@@ -1,24 +1,31 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 
 # ==========================================
 # 1. 페이지 설정 및 꾸브라꼬 스타일 CSS 적용
 # ==========================================
 st.set_page_config(page_title="꾸브라꼬 손익 계산기", layout="wide")
 
-# 꾸브라꼬 브랜드 컬러(레드&화이트) 및 스타일 CSS
+# 꾸브라꼬 브랜드 컬러 및 전체 폰트 확대 CSS
 st.markdown("""
     <style>
+    /* 전체 기본 폰트 크기 확대 */
+    html, body, [class*="css"] {
+        font-size: 1.15rem !important;
+    }
+    
     .kku-title {
         color: #D1180B;
         font-weight: 900;
-        font-size: 2.8rem;
-        margin-bottom: -10px;
+        font-size: 3.2rem !important;
+        margin-bottom: -5px;
     }
     .kku-subtitle {
         color: #444;
-        font-size: 1.2rem;
-        margin-bottom: 20px;
+        font-size: 1.4rem !important;
+        margin-bottom: 25px;
     }
     .card-container {
         display: flex;
@@ -36,19 +43,19 @@ st.markdown("""
         box-shadow: 3px 3px 10px rgba(209, 24, 11, 0.1);
     }
     .kku-card-title {
-        font-size: 1.3rem;
+        font-size: 1.4rem !important;
         font-weight: bold;
         color: #333;
         margin-bottom: 10px;
     }
     .kku-card-value {
-        font-size: 2.2rem;
+        font-size: 2.3rem !important;
         font-weight: 900;
         color: #111;
         margin-bottom: 10px;
     }
     .kku-card-percent {
-        font-size: 1.4rem;
+        font-size: 1.4rem !important;
         font-weight: bold;
         color: #D1180B;
         background-color: #FFF0F0;
@@ -66,23 +73,32 @@ st.markdown("""
         box-shadow: 3px 3px 15px rgba(209, 24, 11, 0.3);
     }
     .kku-card-final .kku-card-title { color: #ffffff; }
-    .kku-card-final .kku-card-value { color: #ffffff; font-size: 2.5rem; }
+    .kku-card-final .kku-card-value { color: #ffffff; font-size: 2.7rem !important; }
     .kku-card-final .kku-card-percent {
         color: #D1180B;
         background-color: #ffffff;
-        font-size: 1.5rem;
+        font-size: 1.5rem !important;
     }
     .formula-box {
         background-color: #f9f9f9;
         border-left: 8px solid #D1180B;
         padding: 20px;
         border-radius: 8px;
-        font-size: 1.5rem;
+        font-size: 1.6rem !important;
         font-weight: bold;
         color: #222;
         text-align: center;
         margin-bottom: 30px;
         box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
+    }
+    
+    /* Streamlit 입력창 및 테이블 폰트 확대 */
+    .stNumberInput label, .stSelectbox label {
+        font-size: 1.25rem !important;
+        font-weight: bold !important;
+    }
+    div[data-testid="stMarkdownContainer"] p {
+        font-size: 1.2rem !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -148,39 +164,39 @@ if uploaded_file is not None:
         results_container = st.container()
         
         # ==========================================
-        # 4. 입력 UI (하단 배치 - 그대로 유지)
+        # 4. 입력 UI (천 단위 쉼표 , 적용)
         # ==========================================
         st.markdown("### 📝 세부 데이터 입력 및 수정 (기본 정보)")
         col1, col2, col3 = st.columns(3)
         
         with col1:
             st.markdown("#### 🔹 매출 및 플랫폼 입금")
-            월매출 = st.number_input("월 매출 (총매출액)", value=월매출_val, step=100000)
-            배민 = st.number_input("배민 (입금기준)", value=배민_val, step=10000)
-            요기요 = st.number_input("요기요 (입금기준)", value=요기요_val, step=10000)
-            쿠팡이츠 = st.number_input("쿠팡이츠 (입금기준)", value=쿠팡이츠_val, step=10000)
-            땡겨요 = st.number_input("땡겨요 (입금기준)", value=땡겨요_val, step=10000)
-            위메프오 = st.number_input("위메프오 (입금기준)", value=위메프오_val, step=10000)
-            포스매출 = st.number_input("포스매출", value=포스매출_val, step=10000)
-            기타매출 = st.number_input("기타 (먹깨비 등)", value=기타매출_val, step=10000)
+            월매출 = st.number_input("월 매출 (총매출액)", value=월매출_val, step=100000, format="%d")
+            배민 = st.number_input("배민 (입금기준)", value=배민_val, step=10000, format="%d")
+            요기요 = st.number_input("요기요 (입금기준)", value=요기요_val, step=10000, format="%d")
+            쿠팡이츠 = st.number_input("쿠팡이츠 (입금기준)", value=쿠팡이츠_val, step=10000, format="%d")
+            땡겨요 = st.number_input("땡겨요 (입금기준)", value=땡겨요_val, step=10000, format="%d")
+            위메프오 = st.number_input("위메프오 (입금기준)", value=위메프오_val, step=10000, format="%d")
+            포스매출 = st.number_input("포스매출", value=포스매출_val, step=10000, format="%d")
+            기타매출 = st.number_input("기타 (먹깨비 등)", value=기타매출_val, step=10000, format="%d")
 
         with col2:
             st.markdown("#### 🔹 물류 비용")
-            물류대 = st.number_input("물류대", value=물류대_val, step=100000)
-            기름 = st.number_input("기름", value=기름_val, step=10000)
-            음료 = st.number_input("음료", value=음료_val, step=10000)
-            주류 = st.number_input("주류", value=주류_val, step=10000)
+            물류대 = st.number_input("물류대", value=물류대_val, step=100000, format="%d")
+            기름 = st.number_input("기름", value=기름_val, step=10000, format="%d")
+            음료 = st.number_input("음료", value=음료_val, step=10000, format="%d")
+            주류 = st.number_input("주류", value=주류_val, step=10000, format="%d")
 
         with col3:
             st.markdown("#### 🔹 운영 비용")
-            인건비 = st.number_input("인건비", value=인건비_val, step=100000)
-            월세 = st.number_input("월세", value=월세_val, step=10000)
-            전기세 = st.number_input("전기세", value=전기세_val, step=10000)
-            가스비 = st.number_input("가스비", value=가스비_val, step=10000)
-            수도세 = st.number_input("수도세", value=수도세_val, step=10000)
-            퀵비 = st.number_input("퀵비", value=퀵비_val, step=10000)
-            포스이용료 = st.number_input("포스이용료", value=포스이용료_val, step=1000)
-            기타잡비 = st.number_input("기타 경비 (보험, 인터넷 등)", value=기타잡비_val, step=10000)
+            인건비 = st.number_input("인건비", value=인건비_val, step=100000, format="%d")
+            월세 = st.number_input("월세", value=월세_val, step=10000, format="%d")
+            전기세 = st.number_input("전기세", value=전기세_val, step=10000, format="%d")
+            가스비 = st.number_input("가스비", value=가스비_val, step=10000, format="%d")
+            수도세 = st.number_input("수도세", value=수도세_val, step=10000, format="%d")
+            퀵비 = st.number_input("퀵비", value=퀵비_val, step=10000, format="%d")
+            포스이용료 = st.number_input("포스이용료", value=포스이용료_val, step=1000, format="%d")
+            기타잡비 = st.number_input("기타 경비 (보험, 인터넷 등)", value=기타잡비_val, step=10000, format="%d")
 
         # ==========================================
         # 5. 실시간 손익 계산
@@ -191,23 +207,22 @@ if uploaded_file is not None:
         
         최종금액 = 입금합계 - 물류합계 - 운영합계
 
-        # 비율 계산 (월매출 기준)
+        # 비율 계산
         입금비율 = (입금합계 / 월매출 * 100) if 월매출 > 0 else 0.0
         물류비율 = (물류합계 / 월매출 * 100) if 월매출 > 0 else 0.0
         운영비율 = (운영합계 / 월매출 * 100) if 월매출 > 0 else 0.0
         수익률 = (최종금액 / 월매출 * 100) if 월매출 > 0 else 0.0
 
-        # 세부 항목 비율 계산 함수
         def calc_pct(val):
             return (val / 월매출 * 100) if 월매출 > 0 else 0.0
 
         # ==========================================
-        # 6. 상단 결과 요약 및 그래프/세부항목 렌더링
+        # 6. 상단 결과 요약 및 시각화 렌더링
         # ==========================================
         with results_container:
             st.markdown(f"### 📊 [{selected_store}] 매장 시뮬레이션 결과")
             
-            # 6-1. 요약 카드
+            # 요약 카드
             html_cards = f"""
             <div class="card-container">
                 <div class="kku-card">
@@ -243,7 +258,7 @@ if uploaded_file is not None:
             """
             st.markdown(html_cards, unsafe_allow_html=True)
 
-            # 6-2. 세부항목별 내역 및 매출 대비 퍼센티지 표
+            # 세부 내역 표
             st.markdown("#### 📋 세부항목별 금액 및 매출 대비 비율(%)")
             d_col1, d_col2, d_col3 = st.columns(3)
 
@@ -286,21 +301,38 @@ if uploaded_file is not None:
 
             st.divider()
 
-            # 6-3. 손익 구성 그래프
+            # Plotly 고가시성 그래프
             st.markdown("#### 📈 손익 구성 및 주요 항목 비교 그래프")
             g_col1, g_col2 = st.columns(2)
 
             with g_col1:
                 st.markdown("**1. 손익 주요 구분 비교 (원)**")
-                chart_summary_df = pd.DataFrame({
-                    "구분": ["입금합계", "물류합계", "운영비합계", "최종순수익"],
-                    "금액": [입금합계, 물류합계, 운영합계, 최종금액]
-                }).set_index("구분")
-                st.bar_chart(chart_summary_df)
+                categories1 = ["입금합계", "물류합계", "운영비합계", "최종순수익"]
+                values1 = [입금합계, 물류합계, 운영합계, 최종금액]
+                colors1 = ["#2E7D32", "#E65100", "#C62828", "#D1180B"]
+
+                fig1 = go.Figure(data=[
+                    go.Bar(
+                        x=categories1,
+                        y=values1,
+                        text=[f"{v:,.0f}원" for v in values1],
+                        textposition='outside',
+                        marker_color=colors1,
+                        textfont=dict(size=14, color='black', family='sans-serif')
+                    )
+                ])
+                fig1.update_layout(
+                    xaxis=dict(tickangle=0, tickfont=dict(size=15, color='black')), # x축 글자 가로 정렬 & 폰트 확대
+                    yaxis=dict(tickfont=dict(size=13)),
+                    margin=dict(l=20, r=20, t=30, b=40),
+                    height=380,
+                    plot_bgcolor="rgba(245,245,245,0.5)"
+                )
+                st.plotly_chart(fig1, use_container_width=True)
 
             with g_col2:
                 st.markdown("**2. 주요 지출/입금 항목 비교 (원)**")
-                detail_items = {
+                detail_dict = {
                     "배민": 배민,
                     "포스매출": 포스매출,
                     "물류대": 물류대,
@@ -309,11 +341,29 @@ if uploaded_file is not None:
                     "퀵비": 퀵비,
                     "기타잡비": 기타잡비
                 }
-                chart_detail_df = pd.DataFrame({
-                    "항목": list(detail_items.keys()),
-                    "금액": list(detail_items.values())
-                }).set_index("항목")
-                st.bar_chart(chart_detail_df)
+                # 금액 큰 순서 정렬
+                sorted_details = sorted(detail_dict.items(), key=lambda x: x[1], reverse=True)
+                categories2 = [x[0] for x in sorted_details]
+                values2 = [x[1] for x in sorted_details]
+
+                fig2 = go.Figure(data=[
+                    go.Bar(
+                        x=categories2,
+                        y=values2,
+                        text=[f"{v:,.0f}" for v in values2],
+                        textposition='outside',
+                        marker_color="#1976D2",
+                        textfont=dict(size=13, color='black')
+                    )
+                ])
+                fig2.update_layout(
+                    xaxis=dict(tickangle=0, tickfont=dict(size=14, color='black')), # x축 글자 가로 정렬 & 폰트 확대
+                    yaxis=dict(tickfont=dict(size=13)),
+                    margin=dict(l=20, r=20, t=30, b=40),
+                    height=380,
+                    plot_bgcolor="rgba(245,245,245,0.5)"
+                )
+                st.plotly_chart(fig2, use_container_width=True)
 
             st.divider()
 
