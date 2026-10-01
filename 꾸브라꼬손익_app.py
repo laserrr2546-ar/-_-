@@ -91,9 +91,9 @@ st.markdown('<div class="kku-title">🐔🔥 꾸브라꼬 숯불치킨 손익 �
 st.markdown('<div class="kku-subtitle">엑셀 파일을 드래그하여 업로드하고 실시간으로 매장 손익을 분석해보세요!</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 2. 파일 업로드 로직
+# 2. 파일 업로드 로직 (가맹점_손익시트_2.xlsx 기준)
 # ==========================================
-uploaded_file = st.file_uploader("📂 '가맹점_손익시트.xlsx' 파일을 여기에 드래그하세요.", type=["xlsx"])
+uploaded_file = st.file_uploader("📂 '가맹점_손익시트_2.xlsx' 파일을 여기에 드래그하세요.", type=["xlsx"])
 
 @st.cache_data
 def load_excel_data(file):
@@ -137,7 +137,11 @@ if uploaded_file is not None:
 
         인건비_val = int(store_data.get("인건비", 0))
         월세_val = int(store_data.get("월세", 0))
-        공과금_val = int(store_data.get("공과금", 0))
+        # 공과금 대신 전기세, 가스비, 수도세 적용
+        전기세_val = int(store_data.get("전기세", 0))
+        가스비_val = int(store_data.get("가스비", 0))
+        수도세_val = int(store_data.get("수도세", 0))
+        
         퀵비_val = int(store_data.get("퀵비", 0))
         포스이용료_val = int(store_data.get("포스이용료", 0))
         기타잡비_val = int(store_data.get("기타 잡비\n(보험·인터넷·정수기 등)", 0))
@@ -172,7 +176,9 @@ if uploaded_file is not None:
             st.markdown("#### 🔹 운영 비용")
             인건비 = st.number_input("인건비", value=인건비_val, step=100000)
             월세 = st.number_input("월세", value=월세_val, step=10000)
-            공과금 = st.number_input("공과금", value=공과금_val, step=10000)
+            전기세 = st.number_input("전기세", value=전기세_val, step=10000)
+            가스비 = st.number_input("가스비", value=가스비_val, step=10000)
+            수도세 = st.number_input("수도세", value=수도세_val, step=10000)
             퀵비 = st.number_input("퀵비", value=퀵비_val, step=10000)
             포스이용료 = st.number_input("포스이용료", value=포스이용료_val, step=1000)
             기타잡비 = st.number_input("기타 경비 (보험, 인터넷 등)", value=기타잡비_val, step=10000)
@@ -182,7 +188,8 @@ if uploaded_file is not None:
         # ==========================================
         입금합계 = 배민 + 요기요 + 쿠팡이츠 + 땡겨요 + 위메프오 + 포스매출 + 기타매출
         물류합계 = 물류대 + 기름 + 음료 + 주류
-        운영합계 = 인건비 + 월세 + 공과금 + 퀵비 + 포스이용료 + 기타잡비
+        # 운영 비용 합계에 공과금 대신 전기세, 가스비, 수도세 적용
+        운영합계 = 인건비 + 월세 + 전기세 + 가스비 + 수도세 + 퀵비 + 포스이용료 + 기타잡비
         
         # 명시된 공식 적용
         최종금액 = 입금합계 - 물류합계 - 운영합계
@@ -237,4 +244,4 @@ if uploaded_file is not None:
             st.divider()
             
 else:
-    st.info("👆 위 영역에 엑셀 파일을 업로드(드래그) 해주세요.")
+    st.info("👆 위 영역에 엑셀 파일('가맹점_손익시트_2.xlsx')을 업로드(드래그) 해주세요.")
