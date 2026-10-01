@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 
 # ==========================================
@@ -11,7 +10,6 @@ st.set_page_config(page_title="꾸브라꼬 손익 계산기", layout="wide")
 # 꾸브라꼬 브랜드 컬러 및 전체 폰트 확대 CSS
 st.markdown("""
     <style>
-    /* 전체 기본 폰트 크기 확대 */
     html, body, [class*="css"] {
         font-size: 1.15rem !important;
     }
@@ -92,7 +90,6 @@ st.markdown("""
         box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
     }
     
-    /* Streamlit 입력창 및 테이블 폰트 확대 */
     .stNumberInput label, .stSelectbox label {
         font-size: 1.25rem !important;
         font-weight: bold !important;
@@ -164,7 +161,7 @@ if uploaded_file is not None:
         results_container = st.container()
         
         # ==========================================
-        # 4. 입력 UI (천 단위 쉼표 , 적용)
+        # 4. 세부 데이터 입력 및 수정 (기본 정보 그대로 유지)
         # ==========================================
         st.markdown("### 📝 세부 데이터 입력 및 수정 (기본 정보)")
         col1, col2, col3 = st.columns(3)
@@ -207,7 +204,6 @@ if uploaded_file is not None:
         
         최종금액 = 입금합계 - 물류합계 - 운영합계
 
-        # 비율 계산
         입금비율 = (입금합계 / 월매출 * 100) if 월매출 > 0 else 0.0
         물류비율 = (물류합계 / 월매출 * 100) if 월매출 > 0 else 0.0
         운영비율 = (운영합계 / 월매출 * 100) if 월매출 > 0 else 0.0
@@ -217,7 +213,7 @@ if uploaded_file is not None:
             return (val / 월매출 * 100) if 월매출 > 0 else 0.0
 
         # ==========================================
-        # 6. 상단 결과 요약 및 시각화 렌더링
+        # 6. 상단 결과 요약 및 매출대비 물류/운영비 그래프
         # ==========================================
         with results_container:
             st.markdown(f"### 📊 [{selected_store}] 매장 시뮬레이션 결과")
@@ -301,69 +297,83 @@ if uploaded_file is not None:
 
             st.divider()
 
-            # Plotly 고가시성 그래프
-            st.markdown("#### 📈 손익 구성 및 주요 항목 비교 그래프")
+            # 입금을 모두 제외한 매출 대비 물류 / 운영비 세부내역 그래프
+            st.markdown("#### 📈 매출 대비 물류 및 운영비 세부내역 분석 그래프")
             g_col1, g_col2 = st.columns(2)
 
             with g_col1:
-                st.markdown("**1. 손익 주요 구분 비교 (원)**")
-                categories1 = ["입금합계", "물류합계", "운영비합계", "최종순수익"]
-                values1 = [입금합계, 물류합계, 운영합계, 최종금액]
-                colors1 = ["#2E7D32", "#E65100", "#C62828", "#D1180B"]
+                st.markdown("**1. 물류 세부 항목 매출 대비 비율 (%)**")
+                supply_dict = {
+                    "물류대": calc_pct(물류대),
+                    "기름": calc_pct(기름),
+                    "음료": calc_pct(음료),
+                    "주류": calc_pct(주류)
+                }
+                supply_labels = list(supply_dict.keys())
+                supply_values = list(supply_dict.values())
+                supply_amounts = [물류대, 기름, 음료, 주류]
 
-                fig1 = go.Figure(data=[
+                fig_supply = go.Figure(data=[
                     go.Bar(
-                        x=categories1,
-                        y=values1,
-                        text=[f"{v:,.0f}원" for v in values1],
+                        x=supply_labels,
+                        y=supply_values,
+                        text=[f"{v:.1f}%<br>({amt:,.0f}원)" for v, amt in zip(supply_values, supply_amounts)],
                         textposition='outside',
-                        marker_color=colors1,
-                        textfont=dict(size=14, color='black', family='sans-serif')
+                        marker_color="#E65100",
+                        textfont=dict(size=14, color='black')
                     )
                 ])
-                fig1.update_layout(
-                    xaxis=dict(tickangle=0, tickfont=dict(size=15, color='black')), # x축 글자 가로 정렬 & 폰트 확대
-                    yaxis=dict(tickfont=dict(size=13)),
+                fig_supply.update_layout(
+                    xaxis=dict(tickangle=0, tickfont=dict(size=15, color='black')),
+                    yaxis=dict(title="매출 대비 비율 (%)", tickfont=dict(size=13)),
                     margin=dict(l=20, r=20, t=30, b=40),
-                    height=380,
+                    height=390,
                     plot_bgcolor="rgba(245,245,245,0.5)"
                 )
-                st.plotly_chart(fig1, use_container_width=True)
+                st.plotly_chart(fig_supply, use_container_width=True)
 
             with g_col2:
-                st.markdown("**2. 주요 지출/입금 항목 비교 (원)**")
-                detail_dict = {
-                    "배민": 배민,
-                    "포스매출": 포스매출,
-                    "물류대": 물류대,
-                    "인건비": 인건비,
-                    "월세": 월세,
-                    "퀵비": 퀵비,
-                    "기타잡비": 기타잡비
+                st.markdown("**2. 운영비 세부 항목 매출 대비 비율 (%)**")
+                oper_dict = {
+                    "인건비": calc_pct(인건비),
+                    "월세": calc_pct(월세),
+                    "전기세": calc_pct(전기세),
+                    "가스비": calc_pct(가스비),
+                    "수도세": calc_pct(수도세),
+                    "퀵비": calc_pct(퀵비),
+                    "포스이용료": calc_pct(포스이용료),
+                    "기타잡비": calc_pct(기타잡비)
                 }
-                # 금액 큰 순서 정렬
-                sorted_details = sorted(detail_dict.items(), key=lambda x: x[1], reverse=True)
-                categories2 = [x[0] for x in sorted_details]
-                values2 = [x[1] for x in sorted_details]
+                # 비율이 높은 순서로 정렬
+                sorted_oper = sorted(oper_dict.items(), key=lambda x: x[1], reverse=True)
+                oper_labels = [x[0] for x in sorted_oper]
+                oper_values = [x[1] for x in sorted_oper]
+                
+                # 금액 매핑
+                amount_map = {
+                    "인건비": 인건비, "월세": 월세, "전기세": 전기세, "가스비": 가스비,
+                    "수도세": 수도세, "퀵비": 퀵비, "포스이용료": 포스이용료, "기타잡비": 기타잡비
+                }
+                oper_amounts = [amount_map[k] for k in oper_labels]
 
-                fig2 = go.Figure(data=[
+                fig_oper = go.Figure(data=[
                     go.Bar(
-                        x=categories2,
-                        y=values2,
-                        text=[f"{v:,.0f}" for v in values2],
+                        x=oper_labels,
+                        y=oper_values,
+                        text=[f"{v:.1f}%<br>({amt:,.0f}원)" for v, amt in zip(oper_values, oper_amounts)],
                         textposition='outside',
-                        marker_color="#1976D2",
+                        marker_color="#C62828",
                         textfont=dict(size=13, color='black')
                     )
                 ])
-                fig2.update_layout(
-                    xaxis=dict(tickangle=0, tickfont=dict(size=14, color='black')), # x축 글자 가로 정렬 & 폰트 확대
-                    yaxis=dict(tickfont=dict(size=13)),
+                fig_oper.update_layout(
+                    xaxis=dict(tickangle=0, tickfont=dict(size=14, color='black')),
+                    yaxis=dict(title="매출 대비 비율 (%)", tickfont=dict(size=13)),
                     margin=dict(l=20, r=20, t=30, b=40),
-                    height=380,
+                    height=390,
                     plot_bgcolor="rgba(245,245,245,0.5)"
                 )
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig_oper, use_container_width=True)
 
             st.divider()
 
