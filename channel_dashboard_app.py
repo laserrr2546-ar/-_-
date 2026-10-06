@@ -148,7 +148,7 @@ if uploaded_file is not None:
                      })
 
         # ==========================================
-        # 지역별 플랫폼 비율 검색 및 시각화
+        # 2. 지역별 플랫폼 비율 검색 및 시각화 (수정됨)
         # ==========================================
         st.markdown("---")
         st.header("🗺️ 지역별 플랫폼 점유율 분석")
@@ -177,10 +177,22 @@ if uploaded_file is not None:
             region_data = data[data['지역'] == selected_region].copy()
             
             if not region_data.empty:
-                # 만원 단위 환산 컬럼 추가
+                # 만원 단위 환산 및 비중(%) 계산
                 region_pie = region_data.groupby(reg_target_col)['실 매출액'].sum().reset_index()
                 region_pie = region_pie[region_pie['실 매출액'] > 0].sort_values('실 매출액', ascending=False)
                 region_pie['실 매출액(만원)'] = region_pie['실 매출액'] / 10000
+                
+                # 해당 지역 총 매출 대비 비중(%) 산출
+                reg_tot_sales = region_pie['실 매출액'].sum()
+                if reg_tot_sales > 0:
+                    region_pie['매출비중(%)'] = (region_pie['실 매출액'] / reg_tot_sales * 100).round(1)
+                else:
+                    region_pie['매출비중(%)'] = 0.0
+                
+                # 막대 상단 표시용 라벨 생성 (예: 1,250만원 (25.4%))
+                region_pie['표시라벨'] = region_pie.apply(
+                    lambda r: f"{r['실 매출액(만원)']:,.0f}만원\n({r['매출비중(%)']:.1f}%)", axis=1
+                )
                 
                 r_col1, r_col2 = st.columns(2)
                 
@@ -193,20 +205,28 @@ if uploaded_file is not None:
                     st.plotly_chart(fig_r_pie, use_container_width=True)
                 
                 with r_col2:
-                    # 막대 차트 (만원 단위 숫자 직접 명시)
+                    # 막대 차트 (상단에 '금액(만원)'과 '비중(%)' 함께 표기)
                     fig_r_bar = px.bar(region_pie, x=reg_target_col, y='실 매출액(만원)', 
-                                       title=f"📍 [{selected_region}] 지역 {reg_target_col}별 실 매출액",
-                                       color=reg_target_col, text='실 매출액(만원)')
-                    # 상단 라벨 및 마우스 오버 포맷을 만원 단위 한글로 적용
-                    fig_r_bar.update_traces(texttemplate='%{text:,.0f}만원', textposition='outside',
-                                           hovertemplate="%{x}: %{y:,.0f}만원")
-                    fig_r_bar.update_layout(showlegend=False, xaxis_title="플랫폼", yaxis_title="실 매출액 (만원)")
+                                       title=f"📍 [{selected_region}] 지역 {reg_target_col}별 실 매출액 및 비중(%)",
+                                       color=reg_target_col, text='표시라벨')
+                    
+                    # 막대 외부 텍스트 위치 및 잘림 방지 옵션 적용
+                    fig_r_bar.update_traces(
+                        textposition='outside',
+                        cliponaxis=False,
+                        hovertemplate="%{x}<br>매출액: %{y:,.0f}만원<br>비중: %{text}"
+                    )
+                    fig_r_bar.update_layout(
+                        showlegend=False, 
+                        xaxis_title="플랫폼", 
+                        yaxis_title="실 매출액 (만원)"
+                    )
                     st.plotly_chart(fig_r_bar, use_container_width=True)
             else:
                 st.warning("선택한 지역에 대한 데이터가 없습니다.")
 
         # ==========================================
-        # 2. 하단: 전국 매장 종합 리스트
+        # 3. 하단: 전국 매장 종합 리스트
         # ==========================================
         st.markdown("---")
         st.header("📋 전국 매장 종합 리스트 (지역/권역 조회)")
