@@ -68,7 +68,7 @@ if uploaded_file is not None:
             ["전체 매장 요약"] + store_list
         )
         
-        # ✨ 새로 추가된 조회 기준 선택 스위치
+        # 조회 기준 선택 스위치
         st.markdown("<br>", unsafe_allow_html=True)
         view_type = st.radio(
             "📊 플랫폼 분석 기준 선택", 
@@ -111,13 +111,12 @@ if uploaded_file is not None:
             
         with cc2:
             df_take = pd.DataFrame({'구분': ['포장 매출', '기타(배달/내점 등)'], '매출액': [take_sales, tot_sales - take_sales]})
-            fig2 = px.pie(df_take, names='구분', values='매출액', title="🛍️ 전체 매출 중 포장 비율", hole=0.3,
+            fig2 = px.pie(df_take, names='구분', values='매출액', title="🛍️️ 전체 매출 중 포장 비율", hole=0.3,
                           color='구분', color_discrete_map={'포장 매출': '#00cc96', '기타(배달/내점 등)': '#ab63fa'})
             fig2.update_traces(textposition="inside", textinfo="percent+label")
             st.plotly_chart(fig2, use_container_width=True)
             
         with cc3:
-            # 선택한 대/소분류 기준에 따라 차트 자동 변경
             channel_pie = f_data.groupby(target_col)['실 매출액'].sum().reset_index()
             channel_pie = channel_pie[channel_pie['실 매출액'] > 0]
             fig3 = px.pie(channel_pie, names=target_col, values='실 매출액', title="🛵 플랫폼 점유율", hole=0.3)
@@ -126,7 +125,6 @@ if uploaded_file is not None:
 
         st.markdown(f"#### 📊 {target_col}별 상세 내역 표")
         
-        # 선택한 대/소분류 기준에 따라 표 자동 변경
         channel_detail = f_data.groupby(target_col)[['건수', '실 매출액']].sum().reset_index()
         channel_detail = channel_detail.sort_values('실 매출액', ascending=False)
         channel_detail = channel_detail[channel_detail['실 매출액'] > 0]
@@ -163,12 +161,25 @@ if uploaded_file is not None:
         store_group['포장비율(%)'] = (store_group['포장매출액'] / store_group['총매출액'] * 100).fillna(0).round(1)
         store_group['온라인비율(%)'] = (store_group['온라인매출'] / store_group['총매출액'] * 100).fillna(0).round(1)
         
-        # 선택한 기준(주문채널 or 주문채널 상세)에 맞춰서 매장별 1위 플랫폼 계산
+        # 1위 플랫폼 계산
         agg_plat = data.groupby(['매장명', target_col])['실 매출액'].sum().reset_index()
         top_plat = agg_plat.sort_values(['매장명', '실 매출액'], ascending=[True, False]).drop_duplicates('매장명')[['매장명', target_col]]
         top_plat = top_plat.rename(columns={target_col: '1위플랫폼'})
         
         store_group = store_group.merge(top_plat, on='매장명', how='left')
+
+        # ⭐ 추가된 부분: 모든 플랫폼별 판매비율(%) 계산 후 열(Column)로 병합 ⭐
+        agg_plat_merged = agg_plat.merge(agg_tot[['매장명', '총매출액']], on='매장명', how='left')
+        agg_plat_merged['비율(%)'] = (agg_plat_merged['실 매출액'] / agg_plat_merged['총매출액'] * 100).fillna(0).round(1)
+        
+        # 데이터를 피벗 테이블로 변환하여 매장별 플랫폼 비율 가로로 넓게 펴기
+        plat_pivot = agg_plat_merged.pivot(index='매장명', columns=target_col, values='비율(%)').fillna(0)
+        # 컬럼 이름에 '플랫폼명(%)' 형식으로 지정
+        plat_pivot.columns = [f"{str(col)}(%)" for col in plat_pivot.columns]
+        plat_cols = plat_pivot.columns.tolist()
+        
+        # 최종 종합 데이터 프레임에 플랫폼 비율들 병합
+        store_group = store_group.merge(plat_pivot, on='매장명', how='left')
         
         scol1, scol2 = st.columns(2)
         with scol1:
@@ -184,18 +195,24 @@ if uploaded_file is not None:
             
         filtered_list = filtered_list.sort_values('총매출액', ascending=False)
         
-        final_cols = ['권역', '지역', '매장명', '총매출액', '온라인매출', '온라인비율(%)', '오프라인매출', '포장매출액', '포장비율(%)', '1위플랫폼']
+        # 컬럼 순서 재배치 (기존 컬럼 + 추가된 플랫폼 전체 비율 컬럼)
+        final_cols = ['권역', '지역', '매장명', '총매출액', '온라인매출', '온라인비율(%)', '오프라인매출', '포장매출액', '포장비율(%)', '1위플랫폼'] + plat_cols
         filtered_list = filtered_list[final_cols]
         
-        st.dataframe(filtered_list, use_container_width=True, hide_index=True,
-                     column_config={
-                         "총매출액": st.column_config.NumberColumn(format="%,d 원"),
-                         "온라인매출": st.column_config.NumberColumn(format="%,d 원"),
-                         "오프라인매출": st.column_config.NumberColumn(format="%,d 원"),
-                         "포장매출액": st.column_config.NumberColumn(format="%,d 원"),
-                         "온라인비율(%)": st.column_config.NumberColumn(format="%.1f %%"),
-                         "포장비율(%)": st.column_config.NumberColumn(format="%.1f %%"),
-                     })
+        # 테이블 컬럼 표시 설정(자동화)
+        col_cfg = {
+            "총매출액": st.column_config.NumberColumn(format="%,d 원"),
+            "온라인매출": st.column_config.NumberColumn(format="%,d 원"),
+            "오프라인매출": st.column_config.NumberColumn(format="%,d 원"),
+            "포장매출액": st.column_config.NumberColumn(format="%,d 원"),
+            "온라인비율(%)": st.column_config.NumberColumn(format="%.1f %%"),
+            "포장비율(%)": st.column_config.NumberColumn(format="%.1f %%"),
+        }
+        # 새로 생성된 모든 플랫폼 비율 열에 대해서도 % 포맷 적용
+        for pc in plat_cols:
+            col_cfg[pc] = st.column_config.NumberColumn(format="%.1f %%")
+        
+        st.dataframe(filtered_list, use_container_width=True, hide_index=True, column_config=col_cfg)
                      
     except Exception as e:
         st.error(f"오류가 발생했습니다: {e}")
