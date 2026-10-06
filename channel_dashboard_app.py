@@ -148,7 +148,7 @@ if uploaded_file is not None:
                      })
 
         # ==========================================
-        # 2. 지역별 플랫폼 비율 검색 및 시각화 (수정됨)
+        # 2. 지역별 플랫폼 비율 검색 및 시각화 (시인성 극대화)
         # ==========================================
         st.markdown("---")
         st.header("🗺️ 지역별 플랫폼 점유율 분석")
@@ -177,27 +177,33 @@ if uploaded_file is not None:
             region_data = data[data['지역'] == selected_region].copy()
             
             if not region_data.empty:
-                # 만원 단위 환산 및 비중(%) 계산
+                # 만원 단위 환산 및 비중(%) 산출
                 region_pie = region_data.groupby(reg_target_col)['실 매출액'].sum().reset_index()
                 region_pie = region_pie[region_pie['실 매출액'] > 0].sort_values('실 매출액', ascending=False)
                 region_pie['실 매출액(만원)'] = region_pie['실 매출액'] / 10000
                 
-                # 해당 지역 총 매출 대비 비중(%) 산출
                 reg_tot_sales = region_pie['실 매출액'].sum()
                 if reg_tot_sales > 0:
                     region_pie['매출비중(%)'] = (region_pie['실 매출액'] / reg_tot_sales * 100).round(1)
                 else:
                     region_pie['매출비중(%)'] = 0.0
                 
-                # 막대 상단 표시용 라벨 생성 (예: 1,250만원 (25.4%))
-                region_pie['표시라벨'] = region_pie.apply(
-                    lambda r: f"{r['실 매출액(만원)']:,.0f}만원\n({r['매출비중(%)']:.1f}%)", axis=1
+                # 핵심: X축 라벨에 비중(%)을 포함시켜 하단에서 크고 명확하게 보이도록 설정
+                region_pie['X축라벨'] = region_pie.apply(
+                    lambda r: f"<b>{r[reg_target_col]}</b><br>({r['매출비중(%)']:.1f}%)", axis=1
                 )
+                
+                # 막대 상단 금액 표시 라벨
+                region_pie['표시라벨'] = region_pie.apply(
+                    lambda r: f"{r['실 매출액(만원)']:,.0f}만원", axis=1
+                )
+                
+                max_val = region_pie['실 매출액(만원)'].max() if not region_pie.empty else 100
                 
                 r_col1, r_col2 = st.columns(2)
                 
                 with r_col1:
-                    # 파이 차트 (점유율 비율 + 만원 단위 툴팁)
+                    # 파이 차트
                     fig_r_pie = px.pie(region_pie, names=reg_target_col, values='실 매출액(만원)', 
                                        title=f"📍 [{selected_region}] 지역 {reg_target_col} 점유율 (%)", hole=0.3)
                     fig_r_pie.update_traces(textposition="inside", textinfo="percent+label",
@@ -205,21 +211,39 @@ if uploaded_file is not None:
                     st.plotly_chart(fig_r_pie, use_container_width=True)
                 
                 with r_col2:
-                    # 막대 차트 (상단에 '금액(만원)'과 '비중(%)' 함께 표기)
-                    fig_r_bar = px.bar(region_pie, x=reg_target_col, y='실 매출액(만원)', 
-                                       title=f"📍 [{selected_region}] 지역 {reg_target_col}별 실 매출액 및 비중(%)",
-                                       color=reg_target_col, text='표시라벨')
+                    # 막대 차트 (가독성 개선)
+                    fig_r_bar = px.bar(
+                        region_pie, 
+                        x='X축라벨', 
+                        y='실 매출액(만원)', 
+                        title=f"📍 [{selected_region}] 지역 {reg_target_col}별 실 매출액 및 비중(%)",
+                        color=reg_target_col, 
+                        text='표시라벨'
+                    )
                     
-                    # 막대 외부 텍스트 위치 및 잘림 방지 옵션 적용
+                    # 선명한 폰트 및 라벨 설정
                     fig_r_bar.update_traces(
                         textposition='outside',
+                        textfont=dict(size=12, color='black'),
                         cliponaxis=False,
-                        hovertemplate="%{x}<br>매출액: %{y:,.0f}만원<br>비중: %{text}"
+                        hovertemplate="<b>%{x}</b><br>매출액: %{y:,.0f}만원"
                     )
+                    
+                    # Y축 단위 '만원' 명시 및 여백 확보
+                    fig_r_bar.update_yaxes(
+                        ticksuffix="만원", 
+                        showexponent='none',
+                        range=[0, max_val * 1.25]
+                    )
+                    
+                    fig_r_bar.update_xaxes(
+                        title_text="플랫폼 (하단 비중 %)"
+                    )
+                    
                     fig_r_bar.update_layout(
                         showlegend=False, 
-                        xaxis_title="플랫폼", 
-                        yaxis_title="실 매출액 (만원)"
+                        yaxis_title="실 매출액 (만원)",
+                        margin=dict(t=50, b=80)
                     )
                     st.plotly_chart(fig_r_bar, use_container_width=True)
             else:
