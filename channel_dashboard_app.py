@@ -71,7 +71,7 @@ if uploaded_file is not None:
         # 조회 기준 선택 스위치
         st.markdown("<br>", unsafe_allow_html=True)
         view_type = st.radio(
-            "📊 플랫폼 분석 기준 선택", 
+            "📊 전체/개별 매장 플랫폼 분석 기준 선택", 
             ["주문채널 (대분류 - 예: 배달의민족, 포스, 요기요 등)", "주문채널 상세 (소분류 - 예: 배민배달, MATE 태블릿 등)"], 
             horizontal=True
         )
@@ -102,25 +102,30 @@ if uploaded_file is not None:
         st.markdown("<br>", unsafe_allow_html=True)
         cc1, cc2, cc3 = st.columns(3)
         
+        # 10,000 단위(만원) 환산 데이터 사용
         with cc1:
-            df_onoff = pd.DataFrame({'구분': ['온라인', '오프라인'], '매출액': [on_sales, off_sales]})
-            fig1 = px.pie(df_onoff, names='구분', values='매출액', title="🌐 온라인 vs 오프라인", hole=0.3,
+            df_onoff = pd.DataFrame({'구분': ['온라인', '오프라인'], '매출액(만원)': [on_sales / 10000, off_sales / 10000]})
+            fig1 = px.pie(df_onoff, names='구분', values='매출액(만원)', title="🌐 온라인 vs 오프라인", hole=0.3,
                           color='구분', color_discrete_map={'온라인': '#636efa', '오프라인': '#ef553b'})
-            fig1.update_traces(textposition="inside", textinfo="percent+label")
+            fig1.update_traces(textposition="inside", textinfo="percent+label",
+                              hovertemplate="%{label}: %{value:,.0f}만원<br>비중: %{percent}")
             st.plotly_chart(fig1, use_container_width=True)
             
         with cc2:
-            df_take = pd.DataFrame({'구분': ['포장 매출', '기타(배달/내점 등)'], '매출액': [take_sales, tot_sales - take_sales]})
-            fig2 = px.pie(df_take, names='구분', values='매출액', title="🛍 전체 매출 중 포장 비율", hole=0.3,
+            df_take = pd.DataFrame({'구분': ['포장 매출', '기타(배달/내점 등)'], '매출액(만원)': [take_sales / 10000, (tot_sales - take_sales) / 10000]})
+            fig2 = px.pie(df_take, names='구분', values='매출액(만원)', title="🛍 전체 매출 중 포장 비율", hole=0.3,
                           color='구분', color_discrete_map={'포장 매출': '#00cc96', '기타(배달/내점 등)': '#ab63fa'})
-            fig2.update_traces(textposition="inside", textinfo="percent+label")
+            fig2.update_traces(textposition="inside", textinfo="percent+label",
+                              hovertemplate="%{label}: %{value:,.0f}만원<br>비중: %{percent}")
             st.plotly_chart(fig2, use_container_width=True)
             
         with cc3:
             channel_pie = f_data.groupby(target_col)['실 매출액'].sum().reset_index()
             channel_pie = channel_pie[channel_pie['실 매출액'] > 0]
-            fig3 = px.pie(channel_pie, names=target_col, values='실 매출액', title="🛵 플랫폼 점유율", hole=0.3)
-            fig3.update_traces(textposition="inside", textinfo="percent+label")
+            channel_pie['실 매출액(만원)'] = channel_pie['실 매출액'] / 10000
+            fig3 = px.pie(channel_pie, names=target_col, values='실 매출액(만원)', title="🛵 플랫폼 점유율", hole=0.3)
+            fig3.update_traces(textposition="inside", textinfo="percent+label",
+                              hovertemplate="%{label}: %{value:,.0f}만원<br>비중: %{percent}")
             st.plotly_chart(fig3, use_container_width=True)
 
         st.markdown(f"#### 📊 {target_col}별 상세 내역 표")
@@ -143,41 +148,59 @@ if uploaded_file is not None:
                      })
 
         # ==========================================
-        # ⭐ 추가된 파트: 1.5 중단 - 지역별 플랫폼 비율 검색 및 시각화 ⭐
+        # 지역별 플랫폼 비율 검색 및 시각화
         # ==========================================
         st.markdown("---")
         st.header("🗺️ 지역별 플랫폼 점유율 분석")
-        st.markdown("특정 지역을 선택하면 해당 지역 내 전체 매장의 플랫폼 비율을 분석할 수 있습니다.")
+        st.markdown("특정 지역을 선택하고, **대분류/소분류 기준**을 조정하여 지역별 맞춤 분석을 확인하세요.")
         
-        region_list = sorted(data['지역'].unique().tolist())
-        selected_region = st.selectbox(
-            "조회할 지역을 검색하거나 선택하세요:",
-            ["(지역을 선택해주세요)"] + region_list
-        )
+        rc1, rc2 = st.columns(2)
+        
+        with rc1:
+            region_list = sorted(data['지역'].unique().tolist())
+            selected_region = st.selectbox(
+                "📍 조회할 지역을 검색하거나 선택하세요:",
+                ["(지역을 선택해주세요)"] + region_list
+            )
+            
+        with rc2:
+            reg_view_type = st.radio(
+                "📈 지역 분석 기준 선택", 
+                ["주문채널 (대분류)", "주문채널 상세 (소분류)"], 
+                horizontal=True,
+                key="reg_view"
+            )
+            
+        reg_target_col = '주문채널 상세' if '상세' in reg_view_type else '주문채널'
         
         if selected_region != "(지역을 선택해주세요)":
             region_data = data[data['지역'] == selected_region].copy()
             
             if not region_data.empty:
-                # 지역별 플랫폼 합산 데이터 생성
-                region_pie = region_data.groupby(target_col)['실 매출액'].sum().reset_index()
+                # 만원 단위 환산 컬럼 추가
+                region_pie = region_data.groupby(reg_target_col)['실 매출액'].sum().reset_index()
                 region_pie = region_pie[region_pie['실 매출액'] > 0].sort_values('실 매출액', ascending=False)
+                region_pie['실 매출액(만원)'] = region_pie['실 매출액'] / 10000
                 
                 r_col1, r_col2 = st.columns(2)
                 
                 with r_col1:
-                    # 파이 차트 (점유율 비율)
-                    fig_r_pie = px.pie(region_pie, names=target_col, values='실 매출액', 
-                                       title=f"📍 [{selected_region}] 지역 플랫폼 점유율 (%)", hole=0.3)
-                    fig_r_pie.update_traces(textposition="inside", textinfo="percent+label")
+                    # 파이 차트 (점유율 비율 + 만원 단위 툴팁)
+                    fig_r_pie = px.pie(region_pie, names=reg_target_col, values='실 매출액(만원)', 
+                                       title=f"📍 [{selected_region}] 지역 {reg_target_col} 점유율 (%)", hole=0.3)
+                    fig_r_pie.update_traces(textposition="inside", textinfo="percent+label",
+                                           hovertemplate="%{label}: %{value:,.0f}만원<br>비중: %{percent}")
                     st.plotly_chart(fig_r_pie, use_container_width=True)
                 
                 with r_col2:
-                    # 바 차트 (실 매출액 규모)
-                    fig_r_bar = px.bar(region_pie, x=target_col, y='실 매출액', 
-                                       title=f"📍 [{selected_region}] 지역 플랫폼별 매출액",
-                                       text_auto='.2s', color=target_col)
-                    fig_r_bar.update_layout(showlegend=False, xaxis_title="플랫폼", yaxis_title="실 매출액 (원)")
+                    # 막대 차트 (만원 단위 숫자 직접 명시)
+                    fig_r_bar = px.bar(region_pie, x=reg_target_col, y='실 매출액(만원)', 
+                                       title=f"📍 [{selected_region}] 지역 {reg_target_col}별 실 매출액",
+                                       color=reg_target_col, text='실 매출액(만원)')
+                    # 상단 라벨 및 마우스 오버 포맷을 만원 단위 한글로 적용
+                    fig_r_bar.update_traces(texttemplate='%{text:,.0f}만원', textposition='outside',
+                                           hovertemplate="%{x}: %{y:,.0f}만원")
+                    fig_r_bar.update_layout(showlegend=False, xaxis_title="플랫폼", yaxis_title="실 매출액 (만원)")
                     st.plotly_chart(fig_r_bar, use_container_width=True)
             else:
                 st.warning("선택한 지역에 대한 데이터가 없습니다.")
@@ -201,7 +224,7 @@ if uploaded_file is not None:
         store_group['포장비율(%)'] = (store_group['포장매출액'] / store_group['총매출액'] * 100).fillna(0).round(1)
         store_group['온라인비율(%)'] = (store_group['온라인매출'] / store_group['총매출액'] * 100).fillna(0).round(1)
         
-        # 1위 플랫폼 계산
+        # 종합 리스트용 1위 플랫폼 계산
         agg_plat = data.groupby(['매장명', target_col])['실 매출액'].sum().reset_index()
         top_plat = agg_plat.sort_values(['매장명', '실 매출액'], ascending=[True, False]).drop_duplicates('매장명')[['매장명', target_col]]
         top_plat = top_plat.rename(columns={target_col: '1위플랫폼'})
@@ -214,7 +237,6 @@ if uploaded_file is not None:
         
         # 데이터를 피벗 테이블로 변환하여 매장별 플랫폼 비율 가로로 넓게 펴기
         plat_pivot = agg_plat_merged.pivot(index='매장명', columns=target_col, values='비율(%)').fillna(0)
-        # 컬럼 이름에 '플랫폼명(%)' 형식으로 지정
         plat_pivot.columns = [f"{str(col)}(%)" for col in plat_pivot.columns]
         plat_cols = plat_pivot.columns.tolist()
         
@@ -235,11 +257,9 @@ if uploaded_file is not None:
             
         filtered_list = filtered_list.sort_values('총매출액', ascending=False)
         
-        # 컬럼 순서 재배치 (기존 컬럼 + 추가된 플랫폼 전체 비율 컬럼)
         final_cols = ['권역', '지역', '매장명', '총매출액', '온라인매출', '온라인비율(%)', '오프라인매출', '포장매출액', '포장비율(%)', '1위플랫폼'] + plat_cols
         filtered_list = filtered_list[final_cols]
         
-        # 테이블 컬럼 표시 설정(자동화)
         col_cfg = {
             "총매출액": st.column_config.NumberColumn(format="%,d 원"),
             "온라인매출": st.column_config.NumberColumn(format="%,d 원"),
@@ -248,7 +268,6 @@ if uploaded_file is not None:
             "온라인비율(%)": st.column_config.NumberColumn(format="%.1f %%"),
             "포장비율(%)": st.column_config.NumberColumn(format="%.1f %%"),
         }
-        # 새로 생성된 모든 플랫폼 비율 열에 대해서도 % 포맷 적용
         for pc in plat_cols:
             col_cfg[pc] = st.column_config.NumberColumn(format="%.1f %%")
         
