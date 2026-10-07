@@ -92,7 +92,7 @@ if file is not None:
     
     filtered_data = data[(data["주차명"].isin(selected_weeks)) & (data["권역"].isin(selected_areas))]
     
-    # 핵심 지표 KPI (오류 수정 지점)
+    # 핵심 지표 KPI
     col1, col2, col3, col4 = st.columns(4)
     total_sales = filtered_data["실제매출"].sum()
     avg_sales = filtered_data["실제매출"].mean()
@@ -183,4 +183,4 @@ if file is not None:
         st.dataframe(filtered_data[["일자", "주차명", "권역", "지역", "매장명", "실제매출", "판매금액", "채널배달료(매출제외)"]], use_container_width=True)
 
 else:
-    st.info("👈 왼쪽 사이드바에서 엑셀 파일(.xlsx)을 업로드
+    st.info("👈 왼쪽 사이드바에서 엑셀 파일(.xlsx)을 업로드해주세요.")
