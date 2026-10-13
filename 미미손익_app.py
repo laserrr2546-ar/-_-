@@ -7,7 +7,6 @@ import plotly.graph_objects as go
 # ==========================================
 st.set_page_config(page_title="미미순두부 손익 계산기", layout="wide")
 
-# 미미순두부 브랜드 컬러(레드/오렌지 계열) 및 전체 폰트 확대 CSS
 st.markdown("""
     <style>
     html, body, [class*="css"] {
@@ -144,11 +143,11 @@ if uploaded_file is not None:
         기타매출_val = int(store_data.get("기타\n(먹깨비, 울산페달, 양산배달)", 0))
         
         물류대_val = int(store_data.get("물류대", 0))
-
-        인건비_val = int(store_data.get("인건비", 0))
         기름_val = int(store_data.get("기름", 0))
         음료_val = int(store_data.get("음료", 0))
         주류_val = int(store_data.get("주류", 0))
+
+        인건비_val = int(store_data.get("인건비", 0))
         월세_val = int(store_data.get("월세", 0))
         전기세_val = int(store_data.get("전기세", 0))
         가스비_val = int(store_data.get("가스비", 0))
@@ -182,13 +181,13 @@ if uploaded_file is not None:
         with col2:
             st.markdown("#### 🔹 물류 비용")
             물류대 = st.number_input("물류대", value=물류대_val, step=100000, format="%d")
+            기름 = st.number_input("기름", value=기름_val, step=10000, format="%d")
+            음료 = st.number_input("음료", value=음료_val, step=10000, format="%d")
+            주류 = st.number_input("주류", value=주류_val, step=10000, format="%d")
 
         with col3:
             st.markdown("#### 🔹 운영 및 기타 비용")
             인건비 = st.number_input("인건비", value=인건비_val, step=100000, format="%d")
-            기름 = st.number_input("기름", value=기름_val, step=10000, format="%d")
-            음료 = st.number_input("음료", value=음료_val, step=10000, format="%d")
-            주류 = st.number_input("주류", value=주류_val, step=10000, format="%d")
             월세 = st.number_input("월세", value=월세_val, step=10000, format="%d")
             전기세 = st.number_input("전기세", value=전기세_val, step=10000, format="%d")
             가스비 = st.number_input("가스비", value=가스비_val, step=10000, format="%d")
@@ -204,8 +203,8 @@ if uploaded_file is not None:
         # 5. 실시간 손익 계산
         # ==========================================
         입금합계 = 배민 + 요기요 + 쿠팡이츠 + 땡겨요 + 위메프오 + 포스매출 + 기타매출
-        물류합계 = 물류대  # 미미순두부 시트 기준 물류 합계는 물류대 중심
-        운영합계 = 인건비 + 기름 + 음료 + 주류 + 월세 + 전기세 + 가스비 + 수도세 + 마케팅비용 + 포스이용료 + 부가세 + 종소세 + 퇴직금세이브 + 기타잡비
+        물류합계 = 물류대 + 기름 + 음료 + 주류  # 물류항목 통합
+        운영합계 = 인건비 + 월세 + 전기세 + 가스비 + 수도세 + 마케팅비용 + 포스이용료 + 부가세 + 종소세 + 퇴직금세이브 + 기타잡비
         
         최종금액 = 입금합계 - 물류합계 - 운영합계
 
@@ -279,6 +278,9 @@ if uploaded_file is not None:
                 st.markdown("**🚚 물류 세부 내역**")
                 df_supply = pd.DataFrame([
                     {"항목": "물류대", "금액(원)": f"{물류대:,.0f}", "매출대비(%)": f"{calc_pct(물류대):.1f}%"},
+                    {"항목": "기름", "금액(원)": f"{기름:,.0f}", "매출대비(%)": f"{calc_pct(기름):.1f}%"},
+                    {"항목": "음료", "금액(원)": f"{음료:,.0f}", "매출대비(%)": f"{calc_pct(음료):.1f}%"},
+                    {"항목": "주류", "금액(원)": f"{주류:,.0f}", "매출대비(%)": f"{calc_pct(주류):.1f}%"},
                 ])
                 st.dataframe(df_supply, hide_index=True, use_container_width=True)
 
@@ -286,9 +288,6 @@ if uploaded_file is not None:
                 st.markdown("**🏢 운영비 세부 내역**")
                 df_oper = pd.DataFrame([
                     {"항목": "인건비", "금액(원)": f"{인건비:,.0f}", "매출대비(%)": f"{calc_pct(인건비):.1f}%"},
-                    {"항목": "기름", "금액(원)": f"{기름:,.0f}", "매출대비(%)": f"{calc_pct(기름):.1f}%"},
-                    {"항목": "음료", "금액(원)": f"{음료:,.0f}", "매출대비(%)": f"{calc_pct(음료):.1f}%"},
-                    {"항목": "주류", "금액(원)": f"{주류:,.0f}", "매출대비(%)": f"{calc_pct(주류):.1f}%"},
                     {"항목": "월세", "금액(원)": f"{월세:,.0f}", "매출대비(%)": f"{calc_pct(월세):.1f}%"},
                     {"항목": "전기세", "금액(원)": f"{전기세:,.0f}", "매출대비(%)": f"{calc_pct(전기세):.1f}%"},
                     {"항목": "가스비", "금액(원)": f"{가스비:,.0f}", "매출대비(%)": f"{calc_pct(가스비):.1f}%"},
@@ -304,55 +303,85 @@ if uploaded_file is not None:
 
             st.divider()
 
-            # 운영비 세부항목 분석 그래프 (비율 높은 순서로 정렬)
-            st.markdown("#### 📈 운영비 세부 항목 매출 대비 비율 (%) 분석 그래프")
-            
-            oper_dict = {
-                "인건비": calc_pct(인건비),
-                "기름": calc_pct(기름),
-                "음료": calc_pct(음료),
-                "주류": calc_pct(주류),
-                "월세": calc_pct(월세),
-                "전기세": calc_pct(전기세),
-                "가스비": calc_pct(가스비),
-                "수도세": calc_pct(수도세),
-                "마케팅비용": calc_pct(마케팅비용),
-                "포스이용료": calc_pct(포스이용료),
-                "부가세": calc_pct(부가세),
-                "종소세": calc_pct(종소세),
-                "퇴직금세이브": calc_pct(퇴직금세이브),
-                "기타잡비": calc_pct(기타잡비)
-            }
-            sorted_oper = sorted(oper_dict.items(), key=lambda x: x[1], reverse=True)
-            oper_labels = [x[0] for x in sorted_oper]
-            oper_values = [x[1] for x in sorted_oper]
-            
-            amount_map = {
-                "인건비": 인건비, "기름": 기름, "음료": 음료, "주류": 주류, "월세": 월세,
-                "전기세": 전기세, "가스비": 가스비, "수도세": 수도세, "마케팅비용": 마케팅비용,
-                "포스이용료": 포스이용료, "부가세": 부가세, "종소세": 종소세,
-                "퇴직금세이브": 퇴직금세이브, "기타잡비": 기타잡비
-            }
-            oper_amounts = [amount_map[k] for k in oper_labels]
+            # 그래프 분리 (물류 세부내역 & 운영비 세부내역)
+            st.markdown("#### 📈 물류 및 운영비 세부 항목 분석 그래프")
+            g_col1, g_col2 = st.columns(2)
 
-            fig_oper = go.Figure(data=[
-                go.Bar(
-                    x=oper_labels,
-                    y=oper_values,
-                    text=[f"{v:.1f}%<br>({amt:,.0f}원)" for v, amt in zip(oper_values, oper_amounts)],
-                    textposition='outside',
-                    marker_color="#E65100",
-                    textfont=dict(size=12, color='black')
+            with g_col1:
+                st.markdown("**1. 물류 세부 항목 매출 대비 비율 (%)**")
+                supply_dict = {
+                    "물류대": calc_pct(물류대),
+                    "기름": calc_pct(기름),
+                    "음료": calc_pct(음료),
+                    "주류": calc_pct(주류)
+                }
+                supply_labels = list(supply_dict.keys())
+                supply_values = list(supply_dict.values())
+                supply_amounts = [물류대, 기름, 음료, 주류]
+
+                fig_supply = go.Figure(data=[
+                    go.Bar(
+                        x=supply_labels,
+                        y=supply_values,
+                        text=[f"{v:.1f}%<br>({amt:,.0f}원)" for v, amt in zip(supply_values, supply_amounts)],
+                        textposition='outside',
+                        marker_color="#F57C00",
+                        textfont=dict(size=13, color='black')
+                    )
+                ])
+                fig_supply.update_layout(
+                    xaxis=dict(tickangle=0, tickfont=dict(size=14, color='black')),
+                    yaxis=dict(title="매출 대비 비율 (%)", tickfont=dict(size=13)),
+                    margin=dict(l=20, r=20, t=30, b=40),
+                    height=390,
+                    plot_bgcolor="rgba(245,245,245,0.5)"
                 )
-            ])
-            fig_oper.update_layout(
-                xaxis=dict(tickangle=-30, tickfont=dict(size=13, color='black')),
-                yaxis=dict(title="매출 대비 비율 (%)", tickfont=dict(size=13)),
-                margin=dict(l=20, r=20, t=30, b=60),
-                height=450,
-                plot_bgcolor="rgba(245,245,245,0.5)"
-            )
-            st.plotly_chart(fig_oper, use_container_width=True)
+                st.plotly_chart(fig_supply, use_container_width=True)
+
+            with g_col2:
+                st.markdown("**2. 운영비 세부 항목 매출 대비 비율 (%)**")
+                oper_dict = {
+                    "인건비": calc_pct(인건비),
+                    "월세": calc_pct(월세),
+                    "전기세": calc_pct(전기세),
+                    "가스비": calc_pct(가스비),
+                    "수도세": calc_pct(수도세),
+                    "마케팅비용": calc_pct(마케팅비용),
+                    "포스이용료": calc_pct(포스이용료),
+                    "부가세": calc_pct(부가세),
+                    "종소세": calc_pct(종소세),
+                    "퇴직금세이브": calc_pct(퇴직금세이브),
+                    "기타잡비": calc_pct(기타잡비)
+                }
+                sorted_oper = sorted(oper_dict.items(), key=lambda x: x[1], reverse=True)
+                oper_labels = [x[0] for x in sorted_oper]
+                oper_values = [x[1] for x in sorted_oper]
+                
+                amount_map = {
+                    "인건비": 인건비, "월세": 월세, "전기세": 전기세, "가스비": 가스비,
+                    "수도세": 수도세, "마케팅비용": 마케팅비용, "포스이용료": 포스이용료,
+                    "부가세": 부가세, "종소세": 종소세, "퇴직금세이브": 퇴직금세이브, "기타잡비": 기타잡비
+                }
+                oper_amounts = [amount_map[k] for k in oper_labels]
+
+                fig_oper = go.Figure(data=[
+                    go.Bar(
+                        x=oper_labels,
+                        y=oper_values,
+                        text=[f"{v:.1f}%<br>({amt:,.0f}원)" for v, amt in zip(oper_values, oper_amounts)],
+                        textposition='outside',
+                        marker_color="#E65100",
+                        textfont=dict(size=12, color='black')
+                    )
+                ])
+                fig_oper.update_layout(
+                    xaxis=dict(tickangle=-30, tickfont=dict(size=13, color='black')),
+                    yaxis=dict(title="매출 대비 비율 (%)", tickfont=dict(size=13)),
+                    margin=dict(l=20, r=20, t=30, b=60),
+                    height=390,
+                    plot_bgcolor="rgba(245,245,245,0.5)"
+                )
+                st.plotly_chart(fig_oper, use_container_width=True)
 
             st.divider()
 
