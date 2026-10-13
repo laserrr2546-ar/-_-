@@ -32,9 +32,9 @@ st.markdown("""
     .kku-card-final {
         flex: 1; background-color: #D1180B; border: 2px solid #D1180B; border-radius: 12px; padding: 20px 10px; text-align: center; box-shadow: 3px 3px 15px rgba(209, 24, 11, 0.3);
     }
-    .kku-card-final .kku-card-title { color: #ffffff; }
-    .kku-card-final .kku-card-value { color: #ffffff; font-size: 2.7rem !important; }
-    .kku-card-final .kku-card-percent { color: #D1180B; background-color: #ffffff; font-size: 1.5rem !important; }
+    .kku-card-final .card-title { color: #ffffff; }
+    .kku-card-final .card-value { color: #ffffff; font-size: 2.5rem !important; }
+    .kku-card-final .card-percent { color: #D1180B; background-color: #ffffff; font-size: 1.4rem !important; }
     .kku-formula-box {
         background-color: #f9f9f9; border-left: 8px solid #D1180B; padding: 20px; border-radius: 8px; font-size: 1.6rem !important; font-weight: bold; color: #222; text-align: center; margin-bottom: 30px; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
     }
@@ -57,18 +57,18 @@ st.markdown("""
     .mimi-card-final {
         flex: 1; background-color: #E65100; border: 2px solid #E65100; border-radius: 12px; padding: 20px 10px; text-align: center; box-shadow: 3px 3px 15px rgba(230, 81, 0, 0.3);
     }
-    .mimi-card-final .mimi-card-title { color: #ffffff; }
-    .mimi-card-final .mimi-card-value { color: #ffffff; font-size: 2.7rem !important; }
-    .mimi-card-final .mimi-card-percent { color: #E65100; background-color: #ffffff; font-size: 1.5rem !important; }
+    .mimi-card-final .card-title { color: #ffffff; }
+    .mimi-card-final .card-value { color: #ffffff; font-size: 2.5rem !important; }
+    .mimi-card-final .card-percent { color: #E65100; background-color: #ffffff; font-size: 1.4rem !important; }
     .mimi-formula-box {
         background-color: #f9f9f9; border-left: 8px solid #E65100; padding: 20px; border-radius: 8px; font-size: 1.6rem !important; font-weight: bold; color: #222; text-align: center; margin-bottom: 30px; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
     }
 
     /* 공통 카드 구성요소 스타일 */
-    .card-container { display: flex; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
-    .card-title { font-size: 1.4rem !important; font-weight: bold; color: #333; margin-bottom: 10px; }
-    .card-value { font-size: 2.3rem !important; font-weight: 900; color: #111; margin-bottom: 10px; }
-    .card-percent { font-size: 1.4rem !important; font-weight: bold; border-radius: 8px; padding: 4px 10px; display: inline-block; }
+    .card-container { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+    .card-title { font-size: 1.25rem !important; font-weight: bold; color: #333; margin-bottom: 8px; }
+    .card-value { font-size: 2.0rem !important; font-weight: 900; color: #111; margin-bottom: 8px; }
+    .card-percent { font-size: 1.2rem !important; font-weight: bold; border-radius: 8px; padding: 3px 8px; display: inline-block; }
     
     .stNumberInput label, .stSelectbox label { font-size: 1.25rem !important; font-weight: bold !important; }
     div[data-testid="stMarkdownContainer"] p { font-size: 1.2rem !important; }
@@ -176,6 +176,7 @@ with tab_kku:
 
             입금비율 = (입금합계 / 월매출 * 100) if 월매출 > 0 else 0.0
             물류비율 = (물류합계 / 월매출 * 100) if 월매출 > 0 else 0.0
+            인건비율 = (인건비 / 월매출 * 100) if 월매출 > 0 else 0.0
             운영비율 = (운영합계 / 월매출 * 100) if 월매출 > 0 else 0.0
             수익률 = (최종금액 / 월매출 * 100) if 월매출 > 0 else 0.0
 
@@ -203,7 +204,12 @@ with tab_kku:
                         <div class="card-percent" style="color:#D1180B; background-color:#FFF0F0;">매출대비 {물류비율:.1f}%</div>
                     </div>
                     <div class="kku-card">
-                        <div class="card-title">4️⃣ 운영비 합계</div>
+                        <div class="card-title">4️⃣ 인건비</div>
+                        <div class="card-value">{인건비:,.0f} 원</div>
+                        <div class="card-percent" style="color:#D1180B; background-color:#FFF0F0;">매출대비 {인건비율:.1f}%</div>
+                    </div>
+                    <div class="kku-card">
+                        <div class="card-title">5️⃣ 운영비 합계</div>
                         <div class="card-value">{운영합계:,.0f} 원</div>
                         <div class="card-percent" style="color:#D1180B; background-color:#FFF0F0;">매출대비 {운영비율:.1f}%</div>
                     </div>
@@ -391,6 +397,7 @@ with tab_mimi:
 
             입금비율 = (입금합계 / 월매출 * 100) if 월매출 > 0 else 0.0
             물류비율 = (물류합계 / 월매출 * 100) if 월매출 > 0 else 0.0
+            인건비율 = (인건비 / 월매출 * 100) if 월매출 > 0 else 0.0
             운영비율 = (운영합계 / 월매출 * 100) if 월매출 > 0 else 0.0
             수익률 = (최종금액 / 월매출 * 100) if 월매출 > 0 else 0.0
 
@@ -418,7 +425,12 @@ with tab_mimi:
                         <div class="card-percent" style="color:#E65100; background-color:#FFF3E0;">매출대비 {물류비율:.1f}%</div>
                     </div>
                     <div class="mimi-card">
-                        <div class="card-title">4️⃣ 운영비 합계</div>
+                        <div class="card-title">4️⃣ 인건비</div>
+                        <div class="card-value">{인건비:,.0f} 원</div>
+                        <div class="card-percent" style="color:#E65100; background-color:#FFF3E0;">매출대비 {인건비율:.1f}%</div>
+                    </div>
+                    <div class="mimi-card">
+                        <div class="card-title">5️⃣ 운영비 합계</div>
                         <div class="card-value">{운영합계:,.0f} 원</div>
                         <div class="card-percent" style="color:#E65100; background-color:#FFF3E0;">매출대비 {운영비율:.1f}%</div>
                     </div>
