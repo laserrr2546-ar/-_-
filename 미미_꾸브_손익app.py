@@ -103,7 +103,6 @@ with tab_kku:
     @st.cache_data
     def load_kku_data(file):
         try:
-            # 1. 헤더 없이 읽어 '매장명' 행 위치 자동 검색
             df_raw = pd.read_excel(file, sheet_name="손익 시트", header=None)
             header_row = None
             for idx, row in df_raw.iterrows():
@@ -112,7 +111,7 @@ with tab_kku:
                     break
             
             if header_row is None:
-                header_row = 3  # 기본값
+                header_row = 3
 
             df = pd.read_excel(file, sheet_name="손익 시트", header=header_row)
             df_clean = df.dropna(how="all").dropna(subset=["매장명"]).copy()
@@ -136,7 +135,6 @@ with tab_kku:
             selected_store_kku = st.selectbox("🏪 분석할 매장 선택 (꾸브라꼬)", options=store_list_kku, key="kku_store")
             store_data_kku = df_kku[df_kku["매장명"] == selected_store_kku].iloc[0]
 
-            # safe_int 함수로 NaN 값을 안전하게 0으로 처리
             월매출_v = safe_int(store_data_kku.get("월 매출"))
             배민_v = safe_int(store_data_kku.get("배민\n(입금기준)"))
             요기요_v = safe_int(store_data_kku.get("요기요\n(입금기준)"))
@@ -165,34 +163,36 @@ with tab_kku:
             st.markdown("### 📝 세부 데이터 입력 및 수정")
             col1, col2, col3 = st.columns(3)
             
+            # 매장 변경 시 number_input이 자동 리셋되도록 key에 selected_store_kku 포함
+            sk = selected_store_kku
             with col1:
                 st.markdown("#### 🔹 매출 및 플랫폼 입금")
-                월매출 = st.number_input("월 매출 (총매출액)", value=월매출_v, step=100000, format="%d", key="kku_1")
-                배민 = st.number_input("배민 (입금기준)", value=배민_v, step=10000, format="%d", key="kku_2")
-                요기요 = st.number_input("요기요 (입금기준)", value=요기요_v, step=10000, format="%d", key="kku_3")
-                쿠팡이츠 = st.number_input("쿠팡이츠 (입금기준)", value=쿠팡이츠_v, step=10000, format="%d", key="kku_4")
-                땡겨요 = st.number_input("땡겨요 (입금기준)", value=땡겨요_v, step=10000, format="%d", key="kku_5")
-                위메프오 = st.number_input("위메프오 (입금기준)", value=위메프오_v, step=10000, format="%d", key="kku_6")
-                포스매출 = st.number_input("포스매출", value=포스매출_v, step=10000, format="%d", key="kku_7")
-                기타매출 = st.number_input("기타 (먹깨비 등)", value=기타매출_v, step=10000, format="%d", key="kku_8")
+                월매출 = st.number_input("월 매출 (총매출액)", value=월매출_v, step=100000, format="%d", key=f"kku_{sk}_1")
+                배민 = st.number_input("배민 (입금기준)", value=배민_v, step=10000, format="%d", key=f"kku_{sk}_2")
+                요기요 = st.number_input("요기요 (입금기준)", value=요기요_v, step=10000, format="%d", key=f"kku_{sk}_3")
+                쿠팡이츠 = st.number_input("쿠팡이츠 (입금기준)", value=쿠팡이츠_v, step=10000, format="%d", key=f"kku_{sk}_4")
+                땡겨요 = st.number_input("땡겨요 (입금기준)", value=땡겨요_v, step=10000, format="%d", key=f"kku_{sk}_5")
+                위메프오 = st.number_input("위메프오 (입금기준)", value=위메프오_v, step=10000, format="%d", key=f"kku_{sk}_6")
+                포스매출 = st.number_input("포스매출", value=포스매출_v, step=10000, format="%d", key=f"kku_{sk}_7")
+                기타매출 = st.number_input("기타 (먹깨비 등)", value=기타매출_v, step=10000, format="%d", key=f"kku_{sk}_8")
 
             with col2:
                 st.markdown("#### 🔹 물류 비용")
-                물류대 = st.number_input("물류대", value=물류대_v, step=100000, format="%d", key="kku_9")
-                기름 = st.number_input("기름", value=기름_v, step=10000, format="%d", key="kku_10")
-                음료 = st.number_input("음료", value=음료_v, step=10000, format="%d", key="kku_11")
-                주류 = st.number_input("주류", value=주류_v, step=10000, format="%d", key="kku_12")
+                물류대 = st.number_input("물류대", value=물류대_v, step=100000, format="%d", key=f"kku_{sk}_9")
+                기름 = st.number_input("기름", value=기름_v, step=10000, format="%d", key=f"kku_{sk}_10")
+                음료 = st.number_input("음료", value=음료_v, step=10000, format="%d", key=f"kku_{sk}_11")
+                주류 = st.number_input("주류", value=주류_v, step=10000, format="%d", key=f"kku_{sk}_12")
 
             with col3:
                 st.markdown("#### 🔹 운영 비용")
-                인건비 = st.number_input("인건비", value=인건비_v, step=100000, format="%d", key="kku_13")
-                월세 = st.number_input("월세", value=월세_v, step=10000, format="%d", key="kku_14")
-                전기세 = st.number_input("전기세", value=전기세_v, step=10000, format="%d", key="kku_15")
-                가스비 = st.number_input("가스비", value=가스비_v, step=10000, format="%d", key="kku_16")
-                수도세 = st.number_input("수도세", value=수도세_v, step=10000, format="%d", key="kku_17")
-                퀵비 = st.number_input("퀵비", value=퀵비_v, step=10000, format="%d", key="kku_18")
-                포스이용료 = st.number_input("포스이용료", value=포스이용료_v, step=1000, format="%d", key="kku_19")
-                기타잡비 = st.number_input("기타 경비", value=기타잡비_v, step=10000, format="%d", key="kku_20")
+                인건비 = st.number_input("인건비", value=인건비_v, step=100000, format="%d", key=f"kku_{sk}_13")
+                월세 = st.number_input("월세", value=월세_v, step=10000, format="%d", key=f"kku_{sk}_14")
+                전기세 = st.number_input("전기세", value=전기세_v, step=10000, format="%d", key=f"kku_{sk}_15")
+                가스비 = st.number_input("가스비", value=가스비_v, step=10000, format="%d", key=f"kku_{sk}_16")
+                수도세 = st.number_input("수도세", value=수도세_v, step=10000, format="%d", key=f"kku_{sk}_17")
+                퀵비 = st.number_input("퀵비", value=퀵비_v, step=10000, format="%d", key=f"kku_{sk}_18")
+                포스이용료 = st.number_input("포스이용료", value=포스이용료_v, step=1000, format="%d", key=f"kku_{sk}_19")
+                기타잡비 = st.number_input("기타 경비", value=기타잡비_v, step=10000, format="%d", key=f"kku_{sk}_20")
 
             입금합계 = 배민 + 요기요 + 쿠팡이츠 + 땡겨요 + 위메프오 + 포스매출 + 기타매출
             물류합계 = 물류대 + 기름 + 음료 + 주류
@@ -331,7 +331,6 @@ with tab_mimi:
     @st.cache_data
     def load_mimi_data(file):
         try:
-            # 1. 헤더 없이 읽어 '매장명' 행 위치 자동 검색
             df_raw = pd.read_excel(file, sheet_name="손익 시트 미미순두부", header=None)
             header_row = None
             for idx, row in df_raw.iterrows():
@@ -340,7 +339,7 @@ with tab_mimi:
                     break
             
             if header_row is None:
-                header_row = 3  # 기본값
+                header_row = 3
 
             df = pd.read_excel(file, sheet_name="손익 시트 미미순두부", header=header_row)
             df_clean = df.dropna(how="all").dropna(subset=["매장명"]).copy()
@@ -364,7 +363,6 @@ with tab_mimi:
             selected_store_mimi = st.selectbox("🏪 분석할 매장 선택 (미미순두부)", options=store_list_mimi, key="mimi_store")
             store_data_m = df_m[df_m["매장명"] == selected_store_mimi].iloc[0]
 
-            # safe_int 함수로 NaN 값을 안전하게 0으로 처리
             m_월매출 = safe_int(store_data_m.get("월 매출"))
             m_배민 = safe_int(store_data_m.get("배민\n(입금기준)"))
             m_요기요 = safe_int(store_data_m.get("요기요\n(입금기준)"))
@@ -396,37 +394,39 @@ with tab_mimi:
             st.markdown("### 📝 세부 데이터 입력 및 수정")
             col1, col2, col3 = st.columns(3)
             
+            # 매장 변경 시 number_input이 자동 리셋되도록 key에 selected_store_mimi 포함
+            sm = selected_store_mimi
             with col1:
                 st.markdown("#### 🔹 매출 및 플랫폼 입금")
-                월매출 = st.number_input("월 매출 (총매출액)", value=m_월매출, step=100000, format="%d", key="m_1")
-                배민 = st.number_input("배민 (입금기준)", value=m_배민, step=10000, format="%d", key="m_2")
-                요기요 = st.number_input("요기요 (입금기준)", value=m_요기요, step=10000, format="%d", key="m_3")
-                쿠팡이츠 = st.number_input("쿠팡이츠 (입금기준)", value=m_쿠팡이츠, step=10000, format="%d", key="m_4")
-                땡겨요 = st.number_input("땡겨요 (입금기준)", value=m_땡겨요, step=10000, format="%d", key="m_5")
-                위메프오 = st.number_input("위메프오 (입금기준)", value=m_위메프오, step=10000, format="%d", key="m_6")
-                포스매출 = st.number_input("포스매출", value=m_포스매출, step=10000, format="%d", key="m_7")
-                기타매출 = st.number_input("기타 (먹깨비 등)", value=m_기타매출, step=10000, format="%d", key="m_8")
+                월매출 = st.number_input("월 매출 (총매출액)", value=m_월매출, step=100000, format="%d", key=f"m_{sm}_1")
+                배민 = st.number_input("배민 (입금기준)", value=m_배민, step=10000, format="%d", key=f"m_{sm}_2")
+                요기요 = st.number_input("요기요 (입금기준)", value=m_요기요, step=10000, format="%d", key=f"m_{sm}_3")
+                쿠팡이츠 = st.number_input("쿠팡이츠 (입금기준)", value=m_쿠팡이츠, step=10000, format="%d", key=f"m_{sm}_4")
+                땡겨요 = st.number_input("땡겨요 (입금기준)", value=m_땡겨요, step=10000, format="%d", key=f"m_{sm}_5")
+                위메프오 = st.number_input("위메프오 (입금기준)", value=m_위메프오, step=10000, format="%d", key=f"m_{sm}_6")
+                포스매출 = st.number_input("포스매출", value=m_포스매출, step=10000, format="%d", key=f"m_{sm}_7")
+                기타매출 = st.number_input("기타 (먹깨비 등)", value=m_기타매출, step=10000, format="%d", key=f"m_{sm}_8")
 
             with col2:
                 st.markdown("#### 🔹 물류 비용 (물류대+음료/주류/기름)")
-                물류대 = st.number_input("물류대", value=m_물류대, step=100000, format="%d", key="m_9")
-                기름 = st.number_input("기름", value=m_기름, step=10000, format="%d", key="m_10")
-                음료 = st.number_input("음료", value=m_음료, step=10000, format="%d", key="m_11")
-                주류 = st.number_input("주류", value=m_주류, step=10000, format="%d", key="m_12")
+                물류대 = st.number_input("물류대", value=m_물류대, step=100000, format="%d", key=f"m_{sm}_9")
+                기름 = st.number_input("기름", value=m_기름, step=10000, format="%d", key=f"m_{sm}_10")
+                음료 = st.number_input("음료", value=m_음료, step=10000, format="%d", key=f"m_{sm}_11")
+                주류 = st.number_input("주류", value=m_주류, step=10000, format="%d", key=f"m_{sm}_12")
 
             with col3:
                 st.markdown("#### 🔹 운영 비용 (세무·마케팅 포함)")
-                인건비 = st.number_input("인건비", value=m_인건비, step=100000, format="%d", key="m_13")
-                월세 = st.number_input("월세", value=m_월세, step=10000, format="%d", key="m_14")
-                전기세 = st.number_input("전기세", value=m_전기세, step=10000, format="%d", key="m_15")
-                가스비 = st.number_input("가스비", value=m_가스비, step=10000, format="%d", key="m_16")
-                수도세 = st.number_input("수도세", value=m_수도세, step=10000, format="%d", key="m_17")
-                마케팅비용 = st.number_input("마케팅비용", value=m_마케팅비용, step=10000, format="%d", key="m_18")
-                포스이용료 = st.number_input("포스이용료", value=m_포스이용료, step=1000, format="%d", key="m_19")
-                부가세 = st.number_input("부가세", value=m_부가세, step=10000, format="%d", key="m_20")
-                종소세 = st.number_input("종소세", value=m_종소세, step=10000, format="%d", key="m_21")
-                퇴직금세이브 = st.number_input("퇴직금세이브", value=m_퇴직금세이브, step=10000, format="%d", key="m_22")
-                기타잡비 = st.number_input("기타 경비", value=m_기타잡비, step=10000, format="%d", key="m_23")
+                인건비 = st.number_input("인건비", value=m_인건비, step=100000, format="%d", key=f"m_{sm}_13")
+                월세 = st.number_input("월세", value=m_월세, step=10000, format="%d", key=f"m_{sm}_14")
+                전기세 = st.number_input("전기세", value=m_전기세, step=10000, format="%d", key=f"m_{sm}_15")
+                가스비 = st.number_input("가스비", value=m_가스비, step=10000, format="%d", key=f"m_{sm}_16")
+                수도세 = st.number_input("수도세", value=m_수도세, step=10000, format="%d", key=f"m_{sm}_17")
+                마케팅비용 = st.number_input("마케팅비용", value=m_마케팅비용, step=10000, format="%d", key=f"m_{sm}_18")
+                포스이용료 = st.number_input("포스이용료", value=m_포스이용료, step=1000, format="%d", key=f"m_{sm}_19")
+                부가세 = st.number_input("부가세", value=m_부가세, step=10000, format="%d", key=f"m_{sm}_20")
+                종소세 = st.number_input("종소세", value=m_종소세, step=10000, format="%d", key=f"m_{sm}_21")
+                퇴직금세이브 = st.number_input("퇴직금세이브", value=m_퇴직금세이브, step=10000, format="%d", key=f"m_{sm}_22")
+                기타잡비 = st.number_input("기타 경비", value=m_기타잡비, step=10000, format="%d", key=f"m_{sm}_23")
 
             입금합계 = 배민 + 요기요 + 쿠팡이츠 + 땡겨요 + 위메프오 + 포스매출 + 기타매출
             물류합계 = 물류대 + 기름 + 음료 + 주류
