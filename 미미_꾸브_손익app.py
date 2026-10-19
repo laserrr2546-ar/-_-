@@ -76,6 +76,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
+# 공통 헬퍼 함수 (안전한 정수 변환)
+# ==========================================
+def safe_int(val):
+    if pd.isna(val):
+        return 0
+    try:
+        return int(val)
+    except:
+        return 0
+
+# ==========================================
 # 탭 생성 (꾸브라꼬 / 미미순두부)
 # ==========================================
 tab_kku, tab_mimi = st.tabs(["🐔 꾸브라꼬 숯불치킨", "🍲 미미순두부"])
@@ -92,9 +103,22 @@ with tab_kku:
     @st.cache_data
     def load_kku_data(file):
         try:
-            df = pd.read_excel(file, sheet_name="손익 시트", header=3)
+            # 1. 헤더 없이 읽어 '매장명' 행 위치 자동 검색
+            df_raw = pd.read_excel(file, sheet_name="손익 시트", header=None)
+            header_row = None
+            for idx, row in df_raw.iterrows():
+                if "매장명" in row.values:
+                    header_row = idx
+                    break
+            
+            if header_row is None:
+                header_row = 3  # 기본값
+
+            df = pd.read_excel(file, sheet_name="손익 시트", header=header_row)
             df_clean = df.dropna(how="all").dropna(subset=["매장명"]).copy()
-            num_cols = df_clean.columns.drop(["No.", "매장명"])
+            df_clean = df_clean[df_clean["매장명"].astype(str).str.strip() != ""]
+            
+            num_cols = [c for c in df_clean.columns if c not in ["No.", "매장명"] and not str(c).startswith("Unnamed")]
             for c in num_cols:
                 df_clean[c] = pd.to_numeric(df_clean[c], errors="coerce").fillna(0)
             return df_clean
@@ -112,28 +136,29 @@ with tab_kku:
             selected_store_kku = st.selectbox("🏪 분석할 매장 선택 (꾸브라꼬)", options=store_list_kku, key="kku_store")
             store_data_kku = df_kku[df_kku["매장명"] == selected_store_kku].iloc[0]
 
-            월매출_v = int(store_data_kku.get("월 매출", 0))
-            배민_v = int(store_data_kku.get("배민\n(입금기준)", 0))
-            요기요_v = int(store_data_kku.get("요기요\n(입금기준)", 0))
-            쿠팡이츠_v = int(store_data_kku.get("쿠팡이츠\n(입금기준)", 0))
-            땡겨요_v = int(store_data_kku.get("땡겨요\n(입금기준)", 0))
-            위메프오_v = int(store_data_kku.get("위메프오\n(입금기준)", 0))
-            포스매출_v = int(store_data_kku.get("포스매출", 0))
-            기타매출_v = int(store_data_kku.get("기타\n(먹깨비, 울산페달, 양산배달)", 0))
+            # safe_int 함수로 NaN 값을 안전하게 0으로 처리
+            월매출_v = safe_int(store_data_kku.get("월 매출"))
+            배민_v = safe_int(store_data_kku.get("배민\n(입금기준)"))
+            요기요_v = safe_int(store_data_kku.get("요기요\n(입금기준)"))
+            쿠팡이츠_v = safe_int(store_data_kku.get("쿠팡이츠\n(입금기준)"))
+            땡겨요_v = safe_int(store_data_kku.get("땡겨요\n(입금기준)"))
+            위메프오_v = safe_int(store_data_kku.get("위메프오\n(입금기준)"))
+            포스매출_v = safe_int(store_data_kku.get("포스매출"))
+            기타매출_v = safe_int(store_data_kku.get("기타\n(먹깨비, 울산페달, 양산배달)"))
             
-            물류대_v = int(store_data_kku.get("물류대", 0))
-            기름_v = int(store_data_kku.get("기름", 0))
-            음료_v = int(store_data_kku.get("음료", 0))
-            주류_v = int(store_data_kku.get("주류", 0))
+            물류대_v = safe_int(store_data_kku.get("물류대"))
+            기름_v = safe_int(store_data_kku.get("기름"))
+            음료_v = safe_int(store_data_kku.get("음료"))
+            주류_v = safe_int(store_data_kku.get("주류"))
 
-            인건비_v = int(store_data_kku.get("인건비", 0))
-            월세_v = int(store_data_kku.get("월세", 0))
-            전기세_v = int(store_data_kku.get("전기세", 0))
-            가스비_v = int(store_data_kku.get("가스비", 0))
-            수도세_v = int(store_data_kku.get("수도세", 0))
-            퀵비_v = int(store_data_kku.get("퀵비", 0))
-            포스이용료_v = int(store_data_kku.get("포스이용료", 0))
-            기타잡비_v = int(store_data_kku.get("기타 잡비\n(보험·인터넷·정수기 등)", 0))
+            인건비_v = safe_int(store_data_kku.get("인건비"))
+            월세_v = safe_int(store_data_kku.get("월세"))
+            전기세_v = safe_int(store_data_kku.get("전기세"))
+            가스비_v = safe_int(store_data_kku.get("가스비"))
+            수도세_v = safe_int(store_data_kku.get("수도세"))
+            퀵비_v = safe_int(store_data_kku.get("퀵비"))
+            포스이용료_v = safe_int(store_data_kku.get("포스이용료"))
+            기타잡비_v = safe_int(store_data_kku.get("기타 잡비\n(보험·인터넷·정수기 등)"))
 
             results_container_kku = st.container()
             
@@ -171,10 +196,8 @@ with tab_kku:
 
             입금합계 = 배민 + 요기요 + 쿠팡이츠 + 땡겨요 + 위메프오 + 포스매출 + 기타매출
             물류합계 = 물류대 + 기름 + 음료 + 주류
-            # 운영비 합계에서 인건비를 제외하여 순수 운영비만 산출
             운영합계 = 월세 + 전기세 + 가스비 + 수도세 + 퀵비 + 포스이용료 + 기타잡비
             
-            # 최종 순수익 계산 시 인건비, 물류합계, 운영합계를 각각 독립적으로 차감
             최종금액 = 입금합계 - 물류합계 - 인건비 - 운영합계
 
             입금비율 = (입금합계 / 월매출 * 100) if 월매출 > 0 else 0.0
@@ -229,7 +252,6 @@ with tab_kku:
                 """
                 st.markdown(html_cards_kku, unsafe_allow_html=True)
 
-                # 세부 내역 표
                 st.markdown("#### 📋 세부항목별 금액 및 매출 대비 비율(%)")
                 d_col1, d_col2, d_col3 = st.columns(3)
 
@@ -272,7 +294,6 @@ with tab_kku:
 
                 st.divider()
 
-                # 그래프
                 st.markdown("#### 📈 매출 대비 물류 및 운영비 세부내역 분석 그래프")
                 g_col1, g_col2 = st.columns(2)
 
@@ -310,9 +331,22 @@ with tab_mimi:
     @st.cache_data
     def load_mimi_data(file):
         try:
-            df = pd.read_excel(file, sheet_name="손익 시트 미미순두부", header=3)
+            # 1. 헤더 없이 읽어 '매장명' 행 위치 자동 검색
+            df_raw = pd.read_excel(file, sheet_name="손익 시트 미미순두부", header=None)
+            header_row = None
+            for idx, row in df_raw.iterrows():
+                if "매장명" in row.values:
+                    header_row = idx
+                    break
+            
+            if header_row is None:
+                header_row = 3  # 기본값
+
+            df = pd.read_excel(file, sheet_name="손익 시트 미미순두부", header=header_row)
             df_clean = df.dropna(how="all").dropna(subset=["매장명"]).copy()
-            num_cols = df_clean.columns.drop(["No.", "매장명"])
+            df_clean = df_clean[df_clean["매장명"].astype(str).str.strip() != ""]
+            
+            num_cols = [c for c in df_clean.columns if c not in ["No.", "매장명"] and not str(c).startswith("Unnamed")]
             for c in num_cols:
                 df_clean[c] = pd.to_numeric(df_clean[c], errors="coerce").fillna(0)
             return df_clean
@@ -330,31 +364,32 @@ with tab_mimi:
             selected_store_mimi = st.selectbox("🏪 분석할 매장 선택 (미미순두부)", options=store_list_mimi, key="mimi_store")
             store_data_m = df_m[df_m["매장명"] == selected_store_mimi].iloc[0]
 
-            m_월매출 = int(store_data_m.get("월 매출", 0))
-            m_배민 = int(store_data_m.get("배민\n(입금기준)", 0))
-            m_요기요 = int(store_data_m.get("요기요\n(입금기준)", 0))
-            m_쿠팡이츠 = int(store_data_m.get("쿠팡이츠\n(입금기준)", 0))
-            m_땡겨요 = int(store_data_m.get("땡겨요\n(입금기준)", 0))
-            m_위메프오 = int(store_data_m.get("위메프오\n(입금기준)", 0))
-            m_포스매출 = int(store_data_m.get("포스매출", 0))
-            m_기타매출 = int(store_data_m.get("기타\n(먹깨비, 울산페달, 양산배달)", 0))
+            # safe_int 함수로 NaN 값을 안전하게 0으로 처리
+            m_월매출 = safe_int(store_data_m.get("월 매출"))
+            m_배민 = safe_int(store_data_m.get("배민\n(입금기준)"))
+            m_요기요 = safe_int(store_data_m.get("요기요\n(입금기준)"))
+            m_쿠팡이츠 = safe_int(store_data_m.get("쿠팡이츠\n(입금기준)"))
+            m_땡겨요 = safe_int(store_data_m.get("땡겨요\n(입금기준)"))
+            m_위메프오 = safe_int(store_data_m.get("위메프오\n(입금기준)"))
+            m_포스매출 = safe_int(store_data_m.get("포스매출"))
+            m_기타매출 = safe_int(store_data_m.get("기타\n(먹깨비, 울산페달, 양산배달)"))
             
-            m_물류대 = int(store_data_m.get("물류대", 0))
-            m_기름 = int(store_data_m.get("기름", 0))
-            m_음료 = int(store_data_m.get("음료", 0))
-            m_주류 = int(store_data_m.get("주류", 0))
+            m_물류대 = safe_int(store_data_m.get("물류대"))
+            m_기름 = safe_int(store_data_m.get("기름"))
+            m_음료 = safe_int(store_data_m.get("음료"))
+            m_주류 = safe_int(store_data_m.get("주류"))
 
-            m_인건비 = int(store_data_m.get("인건비", 0))
-            m_월세 = int(store_data_m.get("월세", 0))
-            m_전기세 = int(store_data_m.get("전기세", 0))
-            m_가스비 = int(store_data_m.get("가스비", 0))
-            m_수도세 = int(store_data_m.get("수도세", 0))
-            m_마케팅비용 = int(store_data_m.get("마케팅비용", 0))
-            m_포스이용료 = int(store_data_m.get("포스이용료", 0))
-            m_부가세 = int(store_data_m.get("부가세", 0))
-            m_종소세 = int(store_data_m.get("종소세", 0))
-            m_퇴직금세이브 = int(store_data_m.get("퇴직금세이브", 0))
-            m_기타잡비 = int(store_data_m.get("기타 잡비\n(보험·인터넷·정수기 등)", 0))
+            m_인건비 = safe_int(store_data_m.get("인건비"))
+            m_월세 = safe_int(store_data_m.get("월세"))
+            m_전기세 = safe_int(store_data_m.get("전기세"))
+            m_가스비 = safe_int(store_data_m.get("가스비"))
+            m_수도세 = safe_int(store_data_m.get("수도세"))
+            m_마케팅비용 = safe_int(store_data_m.get("마케팅비용"))
+            m_포스이용료 = safe_int(store_data_m.get("포스이용료"))
+            m_부가세 = safe_int(store_data_m.get("부가세"))
+            m_종소세 = safe_int(store_data_m.get("종소세"))
+            m_퇴직금세이브 = safe_int(store_data_m.get("퇴직금세이브"))
+            m_기타잡비 = safe_int(store_data_m.get("기타 잡비\n(보험·인터넷·정수기 등)"))
 
             results_container_mimi = st.container()
             
@@ -395,10 +430,8 @@ with tab_mimi:
 
             입금합계 = 배민 + 요기요 + 쿠팡이츠 + 땡겨요 + 위메프오 + 포스매출 + 기타매출
             물류합계 = 물류대 + 기름 + 음료 + 주류
-            # 운영비 합계에서 인건비 제외 (인건비는 독립된 카드로 분리됨)
             운영합계 = 월세 + 전기세 + 가스비 + 수도세 + 마케팅비용 + 포스이용료 + 부가세 + 종소세 + 퇴직금세이브 + 기타잡비
             
-            # 최종 순수익 계산 시 인건비가 중복 차감되지 않도록 독립적으로 반영
             최종금액 = 입금합계 - 물류합계 - 인건비 - 운영합계
 
             입금비율 = (입금합계 / 월매출 * 100) if 월매출 > 0 else 0.0
@@ -453,7 +486,6 @@ with tab_mimi:
                 """
                 st.markdown(html_cards_mimi, unsafe_allow_html=True)
 
-                # 세부 내역 표
                 st.markdown("#### 📋 세부항목별 금액 및 매출 대비 비율(%)")
                 d_col1, d_col2, d_col3 = st.columns(3)
 
@@ -499,7 +531,6 @@ with tab_mimi:
 
                 st.divider()
 
-                # 그래프
                 st.markdown("#### 📈 물류 및 운영비 세부 항목 분석 그래프")
                 g_col1, g_col2 = st.columns(2)
 
