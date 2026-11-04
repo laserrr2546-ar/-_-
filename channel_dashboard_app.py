@@ -1,3 +1,4 @@
+import io
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -32,29 +33,38 @@ def get_area(region):
     return "기타(미분류)"
 
 # -------------------
+# ⚡ 파일 로딩 캐싱 함수 (속도 개선 핵심)
+# -------------------
+@st.cache_data
+def load_excel_data(file_bytes):
+    df = pd.read_excel(io.BytesIO(file_bytes), header=1)
+    
+    # 포장 컬럼 이름 변경
+    df = df.rename(columns={'건수.3': '포장건수', '실 매출액.3': '포장매출액'})
+    
+    # 결측치 및 합계 행 제거
+    data = df.dropna(subset=['매장명', '주문채널', '주문채널 상세']).copy()
+    data = data[data['매장명'] != '합계']
+    data = data[data['주문구분'] != '합계']
+    
+    # 숫자형 변환
+    for col in ['실 매출액', '포장매출액', '건수', '포장건수']:
+        data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0)
+        
+    data['지역'] = data['매장명'].apply(get_region)
+    data['권역'] = data['지역'].apply(get_area)
+    return data
+
+# -------------------
 # 파일 업로드 및 분석
 # -------------------
 uploaded_file = st.file_uploader("주문경로별 매출분석(매장별) 엑셀 파일을 업로드해주세요", type=["xlsx"])
 
 if uploaded_file is not None:
     try:
-        # 데이터 로드 (헤더는 2번째 줄)
-        df = pd.read_excel(uploaded_file, header=1)
-        
-        # 포장 컬럼 이름 변경
-        df = df.rename(columns={'건수.3': '포장건수', '실 매출액.3': '포장매출액'})
-        
-        # 결측치 및 합계 행 제거 (주문채널 대분류, 소분류 모두 체크)
-        data = df.dropna(subset=['매장명', '주문채널', '주문채널 상세']).copy()
-        data = data[data['매장명'] != '합계']
-        data = data[data['주문구분'] != '합계']
-        
-        # 숫자형 변환
-        for col in ['실 매출액', '포장매출액', '건수', '포장건수']:
-            data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0)
-            
-        data['지역'] = data['매장명'].apply(get_region)
-        data['권역'] = data['지역'].apply(get_area)
+        # 바이트 데이터를 읽어 캐싱 함수에 전달
+        file_bytes = uploaded_file.getvalue()
+        data = load_excel_data(file_bytes)
 
         # ==========================================
         # 1. 상단: 전체 요약 및 개별 매장 상세 검색
@@ -68,7 +78,6 @@ if uploaded_file is not None:
             ["전체 매장 요약"] + store_list
         )
         
-        # 조회 기준 선택 스위치
         st.markdown("<br>", unsafe_allow_html=True)
         view_type = st.radio(
             "📊 전체/개별 매장 플랫폼 분석 기준 선택", 
@@ -102,7 +111,6 @@ if uploaded_file is not None:
         st.markdown("<br>", unsafe_allow_html=True)
         cc1, cc2, cc3 = st.columns(3)
         
-        # 10,000 단위(만원) 환산 데이터 사용
         with cc1:
             df_onoff = pd.DataFrame({'구분': ['온라인', '오프라인'], '매출액(만원)': [on_sales / 10000, off_sales / 10000]})
             fig1 = px.pie(df_onoff, names='구분', values='매출액(만원)', title="🌐 온라인 vs 오프라인", hole=0.3,
@@ -148,7 +156,7 @@ if uploaded_file is not None:
                      })
 
         # ==========================================
-        # 2. 지역별 플랫폼 비율 검색 및 시각화 (시인성 극대화)
+        # 2. 지역별 플랫폼 비율 검색 및 시각화
         # ==========================================
         st.markdown("---")
         st.header("🗺️ 지역별 플랫폼 점유율 분석")
@@ -177,7 +185,6 @@ if uploaded_file is not None:
             region_data = data[data['지역'] == selected_region].copy()
             
             if not region_data.empty:
-                # 만원 단위 환산 및 비중(%) 산출
                 region_pie = region_data.groupby(reg_target_col)['실 매출액'].sum().reset_index()
                 region_pie = region_pie[region_pie['실 매출액'] > 0].sort_values('실 매출액', ascending=False)
                 region_pie['실 매출액(만원)'] = region_pie['실 매출액'] / 10000
@@ -188,12 +195,9 @@ if uploaded_file is not None:
                 else:
                     region_pie['매출비중(%)'] = 0.0
                 
-                # 핵심: X축 라벨에 비중(%)을 포함시켜 하단에서 크고 명확하게 보이도록 설정
                 region_pie['X축라벨'] = region_pie.apply(
                     lambda r: f"<b>{r[reg_target_col]}</b><br>({r['매출비중(%)']:.1f}%)", axis=1
                 )
-                
-                # 막대 상단 금액 표시 라벨
                 region_pie['표시라벨'] = region_pie.apply(
                     lambda r: f"{r['실 매출액(만원)']:,.0f}만원", axis=1
                 )
@@ -203,15 +207,13 @@ if uploaded_file is not None:
                 r_col1, r_col2 = st.columns(2)
                 
                 with r_col1:
-                    # 파이 차트
                     fig_r_pie = px.pie(region_pie, names=reg_target_col, values='실 매출액(만원)', 
                                        title=f"📍 [{selected_region}] 지역 {reg_target_col} 점유율 (%)", hole=0.3)
                     fig_r_pie.update_traces(textposition="inside", textinfo="percent+label",
-                                           hovertemplate="%{label}: %{value:,.0f}만원<br>비중: %{percent}")
+                                            hovertemplate="%{label}: %{value:,.0f}만원<br>비중: %{percent}")
                     st.plotly_chart(fig_r_pie, use_container_width=True)
                 
                 with r_col2:
-                    # 막대 차트 (가독성 개선)
                     fig_r_bar = px.bar(
                         region_pie, 
                         x='X축라벨', 
@@ -221,7 +223,6 @@ if uploaded_file is not None:
                         text='표시라벨'
                     )
                     
-                    # 선명한 폰트 및 라벨 설정
                     fig_r_bar.update_traces(
                         textposition='outside',
                         textfont=dict(size=12, color='black'),
@@ -229,7 +230,6 @@ if uploaded_file is not None:
                         hovertemplate="<b>%{x}</b><br>매출액: %{y:,.0f}만원"
                     )
                     
-                    # Y축 단위 '만원' 명시 및 여백 확보
                     fig_r_bar.update_yaxes(
                         ticksuffix="만원", 
                         showexponent='none',
@@ -268,23 +268,19 @@ if uploaded_file is not None:
         store_group['포장비율(%)'] = (store_group['포장매출액'] / store_group['총매출액'] * 100).fillna(0).round(1)
         store_group['온라인비율(%)'] = (store_group['온라인매출'] / store_group['총매출액'] * 100).fillna(0).round(1)
         
-        # 종합 리스트용 1위 플랫폼 계산
         agg_plat = data.groupby(['매장명', target_col])['실 매출액'].sum().reset_index()
         top_plat = agg_plat.sort_values(['매장명', '실 매출액'], ascending=[True, False]).drop_duplicates('매장명')[['매장명', target_col]]
         top_plat = top_plat.rename(columns={target_col: '1위플랫폼'})
         
         store_group = store_group.merge(top_plat, on='매장명', how='left')
 
-        # 모든 플랫폼별 판매비율(%) 계산 후 열(Column)로 병합
         agg_plat_merged = agg_plat.merge(agg_tot[['매장명', '총매출액']], on='매장명', how='left')
         agg_plat_merged['비율(%)'] = (agg_plat_merged['실 매출액'] / agg_plat_merged['총매출액'] * 100).fillna(0).round(1)
         
-        # 데이터를 피벗 테이블로 변환하여 매장별 플랫폼 비율 가로로 넓게 펴기
         plat_pivot = agg_plat_merged.pivot(index='매장명', columns=target_col, values='비율(%)').fillna(0)
         plat_pivot.columns = [f"{str(col)}(%)" for col in plat_pivot.columns]
         plat_cols = plat_pivot.columns.tolist()
         
-        # 최종 종합 데이터 프레임에 플랫폼 비율들 병합
         store_group = store_group.merge(plat_pivot, on='매장명', how='left')
         
         scol1, scol2 = st.columns(2)
@@ -316,6 +312,6 @@ if uploaded_file is not None:
             col_cfg[pc] = st.column_config.NumberColumn(format="%.1f %%")
         
         st.dataframe(filtered_list, use_container_width=True, hide_index=True, column_config=col_cfg)
-                     
+                 
     except Exception as e:
         st.error(f"오류가 발생했습니다: {e}")
