@@ -1,4 +1,4 @@
-iimport pandas as pd
+import pandas as pd
 
 # -------------------
 # 분류 자동화 함수
