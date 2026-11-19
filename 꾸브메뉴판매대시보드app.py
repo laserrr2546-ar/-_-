@@ -27,35 +27,21 @@ def get_target_chicken(menu):
     
     return '기타메뉴'
 
-def is_single_item_menu(raw_menu, menu_category=""):
-    m_no_space = str(raw_menu).replace(' ', '').replace('℃', '도')
-    cat_no_space = str(menu_category).replace(' ', '') if pd.notna(menu_category) else ""
-    
-    # 엑셀 메뉴구분 컬럼에 '단품메뉴'가 명시된 경우
-    if '단품메뉴' in cat_no_space:
-        return True
-        
-    # 주력 단품 치킨 키워드 포함 여부
-    single_keywords = [
-        '170도후라이드', '170도양념', '170도마늘간장', '170도간장',
-        '저당양념꾸브', '양념꾸브', '트러플꾸브', '소금꾸브',
-        '로제꾸브', '까르보꾸브', '데리꾸브'
-    ]
-    return any(k in m_no_space for k in single_keywords)
-
-def get_menu_type(raw_menu, sale_price, menu_category=""):
+def get_menu_type(raw_menu, sale_price):
     m = str(raw_menu)
-    m_no_space = m.replace(' ', '')
-    is_zero_price = pd.isna(sale_price) or sale_price == 0
+    m_no_space = m.replace(' ', '').replace('℃', '도')
+    is_zero_price = pd.isna(sale_price) or sale_price <= 0
 
-    # 1. 순살 변경 옵션들 처리 (주문 건수 중복 집계 방지)
+    # 1. 판매가가 0원인 경우 세트/단품 등 집계에서 모두 제외
+    if is_zero_price:
+        return '제외(기타)'
+
+    # 2. 순살 변경 옵션들 처리 (주문 건수 중복 집계 방지)
     if '안함' in m_no_space:
         return '제외(기타)'
         
     if m.startswith('-') or m.startswith('+') or '순살추가' in m_no_space or '순살변경' in m_no_space:
         if '순살' in m_no_space:
-            if is_zero_price:
-                return '제외(기타)'
             if '메뉴1' in m_no_space or '메뉴2' in m_no_space:
                 return '세트순살옵션'
             else:
@@ -67,30 +53,34 @@ def get_menu_type(raw_menu, sale_price, menu_category=""):
     if '배달' in m or '포장' in m_no_space or '홀매출' in m_no_space:
         return '제외(기타)'
         
-    # 2. 세트 조건 ('순살두마리세트', '취향존중세트', '취향존중순살두마리세트'만 세트로 분류)
-    if any(s in m_no_space for s in ['순살두마리세트', '취향존중세트', '취향존중순살두마리세트']):
-        if is_zero_price:
-            return '제외(기타)'
+    # 3. 세트 기준: '두마리세트'가 포함된 메뉴만 세트로 분류
+    if '두마리세트' in m_no_space:
         return '세트'
         
-    # 3. 사이드 판별
+    # 4. 사이드 판별
     if any(k in m for k in ['사리', '똥집', '치즈볼', '음료', '콜라', '사이다', '튀김', '밥', '햇반', '감자', '떡', '소스', '무', '우동']):
         if not ('우동사리세트' in m_no_space or '똥집세트' in m_no_space or '세트' in m_no_space):
-            if is_zero_price:
-                return '제외(기타)'
             return '사이드'
         
-    # 4. 단품 메뉴로 분류되는 항목 중 0원인 경우:
-    #    '세트'로 별도 집계하되, 단품 vs 세트 비율에서는 제외하기 위해 '세트_0원단품'으로 분류
-    if is_single_item_menu(raw_menu, menu_category) and is_zero_price:
-        return '세트_0원단품'
-    
-    # 그 외 0원 항목은 제외
-    if is_zero_price:
-        return '제외(기타)'
+    # 5. 단품 기준: 지정된 11개 주력 메뉴에 해당하고 판매가(>0원)가 붙어있는 경우만 단품으로 집계
+    single_target_menus = [
+        '170도후라이드',
+        '170도양념치킨',
+        '170도마늘간장치킨',
+        '170도간장치킨',
+        '저당양념꾸브',
+        '양념꾸브',
+        '트러플꾸브',
+        '소금꾸브',
+        '로제꾸브',
+        '까르보꾸브',
+        '데리꾸브'
+    ]
+    if get_target_chicken(raw_menu) in single_target_menus:
+        return '단품'
         
-    # 5. 그 외 치킨 메뉴 및 단품성 세트류는 모두 '단품'으로 처리
-    return '단품'
+    # 그 외 메뉴는 세트/단품 비율에서 제외
+    return '제외(기타)'
 
 def get_bone_type(raw_menu, menu_type):
     m_no_space = str(raw_menu).replace(' ', '')
@@ -117,15 +107,9 @@ if uploaded_file is not None:
         data['판매수량'] = pd.to_numeric(data['판매수량'], errors='coerce').fillna(0)
         data['실매출액'] = pd.to_numeric(data['실매출액'], errors='coerce').fillna(0)
         
-        # 엑셀에 '메뉴구분' 컬럼이 있으면 활용
-        cat_col = '메뉴구분' if '메뉴구분' in data.columns else None
-        
         # 형태 분류 생성
         data['주력메뉴분류'] = data['메뉴명'].apply(get_target_chicken)
-        data['메뉴형태'] = data.apply(
-            lambda x: get_menu_type(x['메뉴명'], x['실매출액'], x[cat_col] if cat_col else ""),
-            axis=1
-        )
+        data['메뉴형태'] = data.apply(lambda x: get_menu_type(x['메뉴명'], x['실매출액']), axis=1)
         data['뼈_순살'] = data.apply(lambda x: get_bone_type(x['메뉴명'], x['메뉴형태']), axis=1)
 
         # ==========================================
@@ -158,15 +142,12 @@ if uploaded_file is not None:
         # ==========================================
         st.markdown("---")
         st.header("🍔 2. 세트 vs 단품 판매 비율 (주문 건수 기준)")
-        st.caption("* 지정된 세트 품목('순살두마리세트', '취향존중세트', '취향존중순살두마리세트')만 '세트'로 분류되며, 단품 메뉴 중 0원 처리되어 세트로 집계되는 항목은 단품·세트 비율에서 제외됩니다.")
+        st.caption("* '두마리세트'가 포함된 품목은 '세트', 지정된 11개 주력 단품 메뉴 중 판매가가 붙은(0원 제외) 품목만 '단품'으로 분류됩니다.")
         
         type_data = data[data['메뉴형태'].isin(['세트', '단품'])]
         type_sales = type_data.groupby('메뉴형태')[['판매수량']].sum().reset_index()
         type_sales = type_sales.sort_values('판매수량', ascending=False)
         type_sales['판매비율(%)'] = (type_sales['판매수량'] / type_sales['판매수량'].sum() * 100).round(1)
-        
-        zero_single_as_set = data[data['메뉴형태'] == '세트_0원단품']
-        zero_set_qty = zero_single_as_set['판매수량'].sum()
         
         col3, col4 = st.columns([1.2, 1])
         with col3:
@@ -181,8 +162,6 @@ if uploaded_file is not None:
                              "판매수량": st.column_config.NumberColumn("주문 건수", format="%,d 건"),
                              "판매비율(%)": st.column_config.NumberColumn("비율", format="%.1f %%")
                          })
-            if zero_set_qty > 0:
-                st.info(f"0원 처리된 단품 메뉴(세트로 별도 집계): {int(zero_set_qty):,} 건 (단품·세트 비율에서 제외됨)")
 
         # ==========================================
         # 3. 사이드 제품 판매 비율
