@@ -70,3 +70,160 @@ def get_bone_type(raw_menu, menu_type):
         if '안함' in m_no_space:
             return '뼈'
         elif '순살' in m_no_space:
+            return '순살'
+        else:
+            return '뼈'
+    return '-'
+
+# -------------------
+# 파일 업로드 및 분석
+# -------------------
+uploaded_file = st.file_uploader("메뉴별 매출분석 엑셀 파일을 업로드해주세요", type=["xlsx"])
+
+if uploaded_file is not None:
+    try:
+        df = pd.read_excel(uploaded_file, header=1)
+        data = df.dropna(subset=['메뉴명']).copy()
+        data = data[data['메뉴명'] != '합계']
+        
+        data['판매수량'] = pd.to_numeric(data['판매수량'], errors='coerce').fillna(0)
+        data['실매출액'] = pd.to_numeric(data['실매출액'], errors='coerce').fillna(0)
+        
+        # 형태 분류 생성
+        data['주력메뉴분류'] = data['메뉴명'].apply(get_target_chicken)
+        data['메뉴형태'] = data.apply(lambda x: get_menu_type(x['메뉴명'], x['실매출액']), axis=1)
+        data['뼈_순살'] = data.apply(lambda x: get_bone_type(x['메뉴명'], x['메뉴형태']), axis=1)
+
+        # ==========================================
+        # 1. 핵심 주력 메뉴 판매 비율
+        # ==========================================
+        st.markdown("---")
+        st.header("🏆 1. 핵심 주력 메뉴 판매 비율")
+        
+        target_data = data[data['주력메뉴분류'] != '기타메뉴']
+        target_sales = target_data.groupby('주력메뉴분류')[['판매수량', '실매출액']].sum().reset_index()
+        target_sales = target_sales.sort_values('판매수량', ascending=False)
+        target_sales['판매비율(%)'] = (target_sales['판매수량'] / target_sales['판매수량'].sum() * 100).round(1)
+        
+        col1, col2 = st.columns([1.2, 1])
+        with col1:
+            fig1 = px.pie(target_sales, names='주력메뉴분류', values='판매수량', hole=0.3)
+            fig1.update_traces(textposition="inside", textinfo="percent+label")
+            st.plotly_chart(fig1, use_container_width=True)
+        with col2:
+            st.dataframe(target_sales, use_container_width=True, hide_index=True,
+                         column_config={
+                             "주력메뉴분류": "메뉴명",
+                             "판매수량": st.column_config.NumberColumn("판매 건수", format="%,d 개"),
+                             "판매비율(%)": st.column_config.NumberColumn("비율", format="%.1f %%"),
+                             "실매출액": st.column_config.NumberColumn("실매출액", format="%,d 원")
+                         })
+
+        # ==========================================
+        # 2. 세트 vs 단품 판매 비율 (주문 건수 기준 / 금액 제외)
+        # ==========================================
+        st.markdown("---")
+        st.header("🍔 2. 세트 vs 단품 판매 비율 (주문 건수 기준)")
+        st.caption("* 지정된 세트 품목('순살두마리세트', '취향존중세트', '취향존중순살두마리세트')만 '세트'로 분류되며, 옵션 항목은 건수 중복을 막기 위해 제외되었습니다.")
+        
+        type_data = data[data['메뉴형태'].isin(['세트', '단품'])]
+        type_sales = type_data.groupby('메뉴형태')[['판매수량']].sum().reset_index()
+        type_sales = type_sales.sort_values('판매수량', ascending=False)
+        type_sales['판매비율(%)'] = (type_sales['판매수량'] / type_sales['판매수량'].sum() * 100).round(1)
+        
+        col3, col4 = st.columns([1.2, 1])
+        with col3:
+            fig2 = px.pie(type_sales, names='메뉴형태', values='판매수량', hole=0.3,
+                          color_discrete_sequence=['#4C78A8', '#F58518'])
+            fig2.update_traces(textposition="inside", textinfo="percent+label+value")
+            st.plotly_chart(fig2, use_container_width=True)
+        with col4:
+            st.dataframe(type_sales, use_container_width=True, hide_index=True,
+                         column_config={
+                             "메뉴형태": "구분",
+                             "판매수량": st.column_config.NumberColumn("주문 건수", format="%,d 건"),
+                             "판매비율(%)": st.column_config.NumberColumn("비율", format="%.1f %%")
+                         })
+
+        # ==========================================
+        # 3. 사이드 제품 판매 비율
+        # ==========================================
+        st.markdown("---")
+        st.header("🍟 3. 사이드 메뉴 판매 비율")
+        
+        side_data = data[data['메뉴형태'] == '사이드']
+        side_sales = side_data.groupby('메뉴명')[['판매수량', '실매출액']].sum().reset_index()
+        side_sales = side_sales.sort_values('판매수량', ascending=False)
+        side_sales['판매비율(%)'] = (side_sales['판매수량'] / side_sales['판매수량'].sum() * 100).round(1)
+        top_sides = side_sales.head(15)
+        
+        col5, col6 = st.columns([1.2, 1])
+        with col5:
+            fig3 = px.pie(top_sides, names='메뉴명', values='판매수량', hole=0.3)
+            fig3.update_traces(textposition="inside", textinfo="percent+label")
+            st.plotly_chart(fig3, use_container_width=True)
+            st.caption("* 차트는 판매 건수 기준 상위 15개 사이드 메뉴만 표시됩니다.")
+        with col6:
+            st.dataframe(side_sales, use_container_width=True, hide_index=True, height=400,
+                         column_config={
+                             "판매수량": st.column_config.NumberColumn("판매 건수", format="%,d 개"),
+                             "판매비율(%)": st.column_config.NumberColumn("비율", format="%.1f %%"),
+                             "실매출액": st.column_config.NumberColumn("실매출액", format="%,d 원")
+                         })
+
+        # ==========================================
+        # 4. 뼈 vs 순살 선호도 (마리 수 기준 완벽 역산)
+        # ==========================================
+        st.markdown("---")
+        st.header("🦴 4. 뼈 vs 순살 선호도 (치킨 '마리(Piece)' 기준)")
+        st.caption("※ 옵션으로 추가된 순살 변경 수량을 정확히 역산하기 위해 단품은 1마리, 세트는 2마리로 쪼개어 계산한 실제 순살 치킨 비율입니다.")
+        
+        single_opt_qty = data.loc[data['메뉴형태'] == '단품순살옵션', '판매수량'].sum()
+        single_opt_rev = data.loc[data['메뉴형태'] == '단품순살옵션', '실매출액'].sum()
+        set_opt_qty = data.loc[data['메뉴형태'] == '세트순살옵션', '판매수량'].sum()
+        set_opt_rev = data.loc[data['메뉴형태'] == '세트순살옵션', '실매출액'].sum()
+        
+        bone_base = data[data['뼈_순살'] != '-'].groupby(['메뉴형태', '뼈_순살'])[['판매수량', '실매출액']].sum().reset_index()
+        
+        s_bone_qty = bone_base.loc[(bone_base['메뉴형태']=='단품') & (bone_base['뼈_순살']=='뼈'), '판매수량'].sum()
+        s_bone_rev = bone_base.loc[(bone_base['메뉴형태']=='단품') & (bone_base['뼈_순살']=='뼈'), '실매출액'].sum()
+        s_boneless_qty = bone_base.loc[(bone_base['메뉴형태']=='단품') & (bone_base['뼈_순살']=='순살'), '판매수량'].sum()
+        s_boneless_rev = bone_base.loc[(bone_base['메뉴형태']=='단품') & (bone_base['뼈_순살']=='순살'), '실매출액'].sum()
+        
+        set_bone_qty = bone_base.loc[(bone_base['메뉴형태']=='세트') & (bone_base['뼈_순살']=='뼈'), '판매수량'].sum()
+        set_bone_rev = bone_base.loc[(bone_base['메뉴형태']=='세트') & (bone_base['뼈_순살']=='뼈'), '실매출액'].sum()
+        set_boneless_qty = bone_base.loc[(bone_base['메뉴형태']=='세트') & (bone_base['뼈_순살']=='순살'), '판매수량'].sum()
+        set_boneless_rev = bone_base.loc[(bone_base['메뉴형태']=='세트') & (bone_base['뼈_순살']=='순살'), '실매출액'].sum()
+        
+        s_bone_avg = s_bone_rev / s_bone_qty if s_bone_qty > 0 else 0
+        set_bone_avg_per_piece = (set_bone_rev / set_bone_qty) / 2 if set_bone_qty > 0 else 0
+        
+        final_bone_qty = (s_bone_qty - single_opt_qty) + (set_bone_qty * 2 - set_opt_qty)
+        final_bone_rev = (s_bone_rev - single_opt_qty * s_bone_avg) + (set_bone_rev - set_opt_qty * set_bone_avg_per_piece)
+        
+        final_boneless_qty = (s_boneless_qty + single_opt_qty) + (set_boneless_qty * 2 + set_opt_qty)
+        final_boneless_rev = (s_boneless_rev + single_opt_rev + single_opt_qty * s_bone_avg) + (set_boneless_rev + set_opt_rev + set_opt_qty * set_bone_avg_per_piece)
+
+        final_bone_df = pd.DataFrame({
+            '구분': ['뼈', '순살'],
+            '판매수량(마리)': [final_bone_qty, final_boneless_qty],
+            '실매출액': [final_bone_rev, final_boneless_rev]
+        })
+        final_bone_df['판매비율(%)'] = (final_bone_df['판매수량(마리)'] / final_bone_df['판매수량(마리)'].sum() * 100).round(1)
+        
+        col7, col8 = st.columns([1.2, 1])
+        with col7:
+            fig4 = px.pie(final_bone_df, names='구분', values='판매수량(마리)', hole=0.3,
+                          color_discrete_map={"뼈": "#8c564b", "순살": "#ff7f0e"})
+            fig4.update_traces(textposition="inside", textinfo="percent+label")
+            st.plotly_chart(fig4, use_container_width=True)
+        with col8:
+            st.dataframe(final_bone_df, use_container_width=True, hide_index=True,
+                         column_config={
+                             "판매수량(마리)": st.column_config.NumberColumn("치킨 마리 수", format="%,d 마리"),
+                             "판매비율(%)": st.column_config.NumberColumn("비율", format="%.1f %%"),
+                             "실매출액": st.column_config.NumberColumn("역산 후 매출액", format="%,d 원")
+                         })
+
+    except Exception as e:
+        st.error(f"오류가 발생했습니다: {e}")
