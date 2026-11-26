@@ -5,14 +5,13 @@ import re
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(page_title="꾸브라꼬 통합 매출 분석 대시보드", layout="wide")
 
 st.title("🍗 꾸브라꼬 통합 매출 분석 대시보드")
-st.markdown(
-    "상단의 **탭 메뉴**를 클릭하여 각 분석 대시보드로 이동할 수 있습니다."
-)
+st.markdown("상단의 **탭 메뉴**를 클릭하여 각 분석 대시보드로 이동할 수 있습니다.")
 
 
 # -------------------------------------------------------------
@@ -72,15 +71,77 @@ def get_area(region):
   return "기타(미분류)"
 
 
+def find_date_column(df):
+  candidates = ["일자", "영업일", "날짜", "매출일자", "기준일자", "월", "년월", "연월"]
+  for c in candidates:
+    if c in df.columns:
+      return c
+  for col in df.columns:
+    s = str(col)
+    if any(k in s for k in ["일자", "날짜", "년월", "연월"]) or s.strip() == "월":
+      return col
+  return None
+
+
+def parse_year_month_series(series):
+  # 이미 datetime/Timestamp 타입인 경우
+  if pd.api.types.is_datetime64_any_dtype(series):
+    dt = pd.to_datetime(series, errors="coerce")
+    return dt.dt.to_period("M").astype(str).where(dt.notna(), None)
+
+  def _parse_one(val):
+    if pd.isna(val):
+      return None
+    s = str(val).strip()
+    if not s or s in ["합계", "소계", "총계", "nan", "None"]:
+      return None
+
+    # 1) YYYY-MM, YYYY/MM, YYYY.MM, YYYY년 MM월 형태
+    m = re.match(r"^(\d{4})\s*[-/.년]\s*(\d{1,2})\s*월?$", s)
+    if m:
+      y, mo = int(m.group(1)), int(m.group(2))
+      if 1 <= mo <= 12:
+        return f"{y:04d}-{mo:02d}"
+
+    # 2) YYYYMMDD 또는 YYYYMM 숫자/문자열 형태
+    digits = re.sub(r"\D", "", s)
+    if len(digits) == 8:
+      y, mo = int(digits[:4]), int(digits[4:6])
+      if 1 <= mo <= 12:
+        return f"{y:04d}-{mo:02d}"
+    if len(digits) == 6:
+      y, mo = int(digits[:4]), int(digits[4:6])
+      if 1 <= mo <= 12:
+        return f"{y:04d}-{mo:02d}"
+
+    # 3) 일반 날짜 파싱 시도
+    dt = pd.to_datetime(s, errors="coerce")
+    if pd.notna(dt):
+      return f"{dt.year:04d}-{dt.month:02d}"
+
+    # 4) '10월'처럼 월만 있는 경우 (현재 연도 기준 보완)
+    m_only = re.match(r"^(\d{1,2})\s*월$", s)
+    if m_only:
+      mo = int(m_only.group(1))
+      if 1 <= mo <= 12:
+        cur_year = datetime.now().year
+        return f"{cur_year:04d}-{mo:02d}"
+
+    return None
+
+  return series.apply(_parse_one)
+
+
 WON_FORMAT = "₩%,d"
 
 # -------------------------------------------------------------
 # [탭 메뉴 구성]
 # -------------------------------------------------------------
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📊 매출 및 휴무일 대시보드",
     "🍗 메뉴별 판매 분석 대시보드",
     "🛵 채널/플랫폼 심층 분석 대시보드",
+    "📈 월별 매출 증감률 추이",
 ])
 
 # =============================================================
@@ -303,7 +364,7 @@ with tab1:
         fig_holiday10.update_traces(marker_color="orange")
         st.plotly_chart(fig_holiday10, use_container_width=True)
 
-        # 권역별 매출 (.style 과 부하 제거 -> column_config로 대폭 최적화)
+        # 권역별 매출
         st.header("권역별 매출")
         area_sales = (
             store_sales.groupby("권역")[["실제매출", "일평균매출", "월예상매출"]]
@@ -935,3 +996,401 @@ with tab3:
 
     except Exception as e:
       st.error(f"탭 3 오류 발생: {e}")
+
+# =============================================================
+# [TAB 4] 월별 매출 증감률 추이 (6개월 중심 자동 월 인식)
+# =============================================================
+with tab4:
+  st.header("📈 월별 매출 증감률 추이 (상승 / 하락률 분석)")
+  st.markdown(
+      "기초 매출 엑셀 파일에서 **월(YYYY-MM)을 자동 인식**하여 월별 실제매출 및"
+      " **전월 대비 증감률(상승·하락률)**을 분석합니다."
+  )
+
+  DOWNLOADS_DIR_T4 = os.path.join(os.path.expanduser("~"), "Downloads")
+  FILE_PATTERN_T4 = "*기간별_매출분석*.xlsx"
+  auto_file_path_t4 = None
+  if os.path.exists(DOWNLOADS_DIR_T4):
+    files_t4 = glob.glob(os.path.join(DOWNLOADS_DIR_T4, FILE_PATTERN_T4))
+    if files_t4:
+      auto_file_path_t4 = max(files_t4, key=os.path.getmtime)
+
+  uploaded_file_tab4 = st.file_uploader(
+      "월별 매출 추이를 분석할 '기간별 매출분석' 엑셀 파일을 업로드해주세요"
+      " (여러 개월 데이터 포함 권장)",
+      type=["xlsx"],
+      key="upload_tab4",
+  )
+
+  file_source_tab4 = None
+  if uploaded_file_tab4 is not None:
+    file_source_tab4 = uploaded_file_tab4
+    st.info("탭 4에 업로드하신 파일을 사용합니다.")
+  elif auto_file_path_t4 is not None:
+    file_source_tab4 = auto_file_path_t4
+    st.success(
+        "내 PC 다운로드 폴더에서 최신 파일을 자동으로 불러왔습니다:"
+        f" {os.path.basename(auto_file_path_t4)}"
+    )
+  else:
+    st.warning("위에서 분석할 엑셀 파일을 직접 업로드해주세요.")
+
+  if file_source_tab4 is not None:
+    try:
+
+      @st.cache_data
+      def load_tab4_data(file_input):
+        raw = pd.read_excel(file_input, header=None, nrows=5)
+        header_row_idx = 0
+        for i in range(len(raw)):
+          row_values = [str(v) for v in raw.iloc[i].tolist()]
+          if any("매장명" in v for v in row_values):
+            header_row_idx = i
+            break
+
+        if hasattr(file_input, "seek"):
+          file_input.seek(0)
+        return pd.read_excel(file_input, header=header_row_idx)
+
+      df_tab4 = load_tab4_data(file_source_tab4)
+      data4 = df_tab4.copy()
+
+      store_col4 = None
+      for col in data4.columns:
+        if "매장명" in str(col):
+          store_col4 = col
+          break
+
+      date_col4 = find_date_column(data4)
+
+      if store_col4 is None:
+        st.error("매장명 컬럼을 찾지 못했습니다.")
+      elif date_col4 is None:
+        st.warning(
+            "업로드된 엑셀 파일에 날짜/월 컬럼('일자', '월', '년월' 등)이 없어"
+            " 월별 추이를 계산할 수 없습니다. 일자/월이 포함된 기초 데이터를"
+            " 업로드해주세요."
+        )
+      else:
+        data4 = data4.dropna(subset=[store_col4, date_col4])
+        data4[store_col4] = data4[store_col4].astype(str).str.strip()
+        data4 = data4[
+            ~data4[store_col4].isin(["합계", "소계", "총계", ""])
+        ]
+        data4 = data4[
+            ~data4[store_col4].str.contains("합계|소계|총계", na=False)
+        ]
+
+        data4["연월"] = parse_year_month_series(data4[date_col4])
+        data4 = data4.dropna(subset=["연월"])
+
+        if "판매금액" in data4.columns and "채널배달료(매출제외)" in data4.columns:
+          data4["판매금액"] = pd.to_numeric(
+              data4["판매금액"], errors="coerce"
+          ).fillna(0)
+          data4["채널배달료(매출제외)"] = pd.to_numeric(
+              data4["채널배달료(매출제외)"], errors="coerce"
+          ).fillna(0)
+          data4["실제매출"] = data4["판매금액"] - data4["채널배달료(매출제외)"]
+        elif "실제매출" in data4.columns:
+          data4["실제매출"] = pd.to_numeric(
+              data4["실제매출"], errors="coerce"
+          ).fillna(0)
+        elif "판매금액" in data4.columns:
+          data4["실제매출"] = pd.to_numeric(
+              data4["판매금액"], errors="coerce"
+          ).fillna(0)
+        else:
+          st.error("매출 계산용 컬럼('판매금액' 또는 '실제매출')을 찾지 못했습니다.")
+          st.stop()
+
+        data4["지역"] = data4[store_col4].apply(get_region)
+        data4["권역"] = data4["지역"].apply(get_area)
+
+        all_months = sorted(data4["연월"].unique().tolist())
+        if len(all_months) < 2:
+          st.info(
+              f"감지된 월: **{', '.join(all_months)}** (전월 대비 증감률을"
+              " 계산하려면 2개월 이상의 데이터가 필요합니다.)"
+          )
+
+        st.markdown("---")
+        st.subheader("🗓️ 자동 감지된 월 및 조회 범위 설정")
+        st.success(
+            f"자동 인식된 월 ({len(all_months)}개월): **{', '.join(all_months)}**"
+        )
+
+        fc1, fc2, fc3 = st.columns([1.4, 1.4, 1.2])
+        with fc1:
+          area_filter_t4 = st.selectbox(
+              "권역 필터",
+              ["전체"] + sorted(data4["권역"].unique().tolist()),
+              key="tab4_area",
+          )
+        with fc2:
+          candidate_stores = (
+              data4[data4["권역"] == area_filter_t4][store_col4]
+              .unique()
+              .tolist()
+              if area_filter_t4 != "전체"
+              else data4[store_col4].unique().tolist()
+          )
+          store_options_t4 = ["전체 매장 합계"] + sorted(candidate_stores)
+          selected_store_t4 = st.selectbox(
+              "매장 선택 (예: 부산장전직영점)",
+              store_options_t4,
+              key="tab4_store",
+          )
+        with fc3:
+          period_mode_t4 = st.radio(
+              "표시 기간 기준",
+              ["최근 6개월", "전체 기간"],
+              horizontal=True,
+              key="tab4_period_mode",
+          )
+
+        target_months = (
+            all_months[-6:] if period_mode_t4 == "최근 6개월" else all_months
+        )
+
+        # 선택 대상(전체 합계 또는 개별 매장) 월별 집계
+        if selected_store_t4 == "전체 매장 합계":
+          base_df = (
+              data4[data4["권역"] == area_filter_t4]
+              if area_filter_t4 != "전체"
+              else data4
+          )
+        else:
+          base_df = data4[data4[store_col4] == selected_store_t4]
+
+        # 전체 월 기준 증감률 계산 후 선택된 표시 기간으로 슬라이싱
+        full_m_sales = (
+            base_df.groupby("연월", as_index=False)["실제매출"]
+            .sum()
+            .set_index("연월")
+            .reindex(all_months, fill_value=0)
+            .reset_index()
+            .rename(columns={"index": "연월"})
+        )
+        full_m_sales["전월매출"] = full_m_sales["실제매출"].shift(1)
+        full_m_sales["증감액"] = full_m_sales["실제매출"] - full_m_sales["전월매출"]
+        full_m_sales["증감률(%)"] = full_m_sales.apply(
+            lambda r: (
+                ((r["실제매출"] - r["전월매출"]) / r["전월매출"] * 100)
+                if pd.notna(r["전월매출"]) and r["전월매출"] > 0
+                else None
+            ),
+            axis=1,
+        )
+        full_m_sales["구분"] = full_m_sales["증감률(%)"].apply(
+            lambda v: (
+                "기준월(전월없음)"
+                if pd.isna(v)
+                else ("상승" if v > 0 else ("하락" if v < 0 else "보합"))
+            )
+        )
+
+        view_m_sales = full_m_sales[full_m_sales["연월"].isin(target_months)].copy()
+
+        st.markdown("---")
+        st.subheader(f"📊 [{selected_store_t4}] 월별 매출 및 전월 대비 증감률")
+
+        if len(view_m_sales) >= 1:
+          latest_row = view_m_sales.iloc[-1]
+          prev_row = view_m_sales.iloc[-2] if len(view_m_sales) >= 2 else None
+
+          k1, k2, k3 = st.columns(3)
+          k1.metric(
+              f"{latest_row['연월']} 실제매출",
+              f"{latest_row['실제매출']:,.0f} 원",
+              (
+                  f"{latest_row['증감률(%)']:+.1f}%"
+                  if pd.notna(latest_row["증감률(%)"])
+                  else "전월 데이터 없음"
+              ),
+          )
+          if prev_row is not None and pd.notna(latest_row["증감액"]):
+            k2.metric(
+                f"전월({prev_row['연월']}) 대비 증감액",
+                f"{latest_row['증감액']:+,.0f} 원",
+            )
+          else:
+            k2.metric("전월 대비 증감액", "- 원")
+
+          max_drop_df = view_m_sales.dropna(subset=["증감률(%)"])
+          if not max_drop_df.empty:
+            worst_row = max_drop_df.loc[max_drop_df["증감률(%)"].idxmin()]
+            k3.metric(
+                "기간 내 최대 하락 월",
+                f"{worst_row['연월']}",
+                f"{worst_row['증감률(%)']:.1f}%",
+                delta_color="inverse",
+            )
+          else:
+            k3.metric("기간 내 최대 하락 월", "-")
+
+        # 차트 1: 월별 실제매출 추이
+        fig_m_rev = px.bar(
+            view_m_sales,
+            x="연월",
+            y="실제매출",
+            text="실제매출",
+            title=f"[{selected_store_t4}] 월별 실제매출 추이 ({period_mode_t4})",
+        )
+        fig_m_rev.update_traces(
+            texttemplate="₩%{text:,.0f}",
+            textposition="outside",
+            marker_color="#2E86AB",
+        )
+        fig_m_rev.update_layout(yaxis_tickformat=",")
+        st.plotly_chart(fig_m_rev, use_container_width=True)
+
+        # 차트 2: 전월 대비 매출 증감률(%) (상승/하락 모두 표시)
+        rate_plot_df = view_m_sales.dropna(subset=["증감률(%)"]).copy()
+        if not rate_plot_df.empty:
+          rate_plot_df["색상"] = rate_plot_df["증감률(%)"].apply(
+              lambda x: "상승" if x >= 0 else "하락"
+          )
+          fig_m_rate = px.bar(
+              rate_plot_df,
+              x="연월",
+              y="증감률(%)",
+              color="색상",
+              color_discrete_map={"상승": "#1B9E77", "하락": "#D95F02"},
+              text="증감률(%)",
+              title=(
+                  f"[{selected_store_t4}] 전월 대비 매출 증감률(%) — 상승 및"
+                  " 하락률"
+              ),
+          )
+          fig_m_rate.update_traces(
+              texttemplate="%{text:+.1f}%", textposition="outside"
+          )
+          fig_m_rate.add_hline(y=0, line_dash="dash", line_color="gray")
+          st.plotly_chart(fig_m_rate, use_container_width=True)
+
+        # 월별 상세 테이블
+        st.dataframe(
+            view_m_sales[[
+                "연월",
+                "실제매출",
+                "전월매출",
+                "증감액",
+                "증감률(%)",
+                "구분",
+            ]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "실제매출": st.column_config.NumberColumn(format=WON_FORMAT),
+                "전월매출": st.column_config.NumberColumn(format=WON_FORMAT),
+                "증감액": st.column_config.NumberColumn(format="₩%+,.0f"),
+                "증감률(%)": st.column_config.NumberColumn(format="%+.1f %%"),
+            },
+        )
+
+        # -----------------------------------------------------
+        # 6개월 매장별 월별 매출 및 증감률 비교 테이블
+        # -----------------------------------------------------
+        st.markdown("---")
+        st.subheader(
+            f"📋 매장별 월별 매출 및 전월 대비 증감률 ({period_mode_t4})"
+        )
+
+        matrix_base = (
+            data4[data4["권역"] == area_filter_t4]
+            if area_filter_t4 != "전체"
+            else data4
+        )
+        kw_t4 = st.text_input(
+            "매장명 검색 (표 필터링)", key="tab4_table_kw"
+        )
+        if kw_t4:
+          matrix_base = matrix_base[
+              matrix_base[store_col4].str.contains(kw_t4, case=False, na=False)
+          ]
+
+        pivot_sales = (
+            matrix_base.groupby([store_col4, "지역", "권역", "연월"])["실제매출"]
+            .sum()
+            .unstack(fill_value=0)
+            .reindex(columns=all_months, fill_value=0)
+        )
+
+        # 전월 대비 증감률 피벗 계산
+        growth_cols = {}
+        for idx in range(1, len(all_months)):
+          prev_m = all_months[idx - 1]
+          curr_m = all_months[idx]
+          if curr_m in target_months:
+            col_name = f"{curr_m} 증감률(%)"
+            growth_cols[col_name] = pivot_sales.apply(
+                lambda r: (
+                    round(((r[curr_m] - r[prev_m]) / r[prev_m]) * 100, 1)
+                    if r[prev_m] > 0
+                    else None
+                ),
+                axis=1,
+            )
+
+        summary_table = pivot_sales.reset_index()
+        # 표시 대상 월 매출 컬럼만 남기기
+        keep_sales_cols = [store_col4, "권역", "지역"] + [
+            m for m in target_months if m in pivot_sales.columns
+        ]
+        summary_table = summary_table[keep_sales_cols]
+        for g_col, g_ser in growth_cols.items():
+          summary_table[g_col] = summary_table[store_col4].map(g_ser)
+
+        # 정렬 및 하락 매장 필터
+        rate_col_names = list(growth_cols.keys())
+        sort_col_t4 = st.selectbox(
+            "정렬 기준 선택",
+            (
+                rate_col_names
+                + [m for m in target_months if m in summary_table.columns]
+            ),
+            index=len(rate_col_names) - 1 if rate_col_names else 0,
+            key="tab4_sort_col",
+        )
+        only_decline = st.checkbox(
+            "선택한 증감률 기준 '하락(음수)' 매장만 보기",
+            value=False,
+            key="tab4_only_decline",
+        )
+
+        display_matrix = summary_table.copy()
+        if only_decline and sort_col_t4 in display_matrix.columns:
+          display_matrix = display_matrix[
+              display_matrix[sort_col_t4].notna()
+              & (display_matrix[sort_col_t4] < 0)
+          ]
+          display_matrix = display_matrix.sort_values(
+              by=sort_col_t4, ascending=True
+          )
+        else:
+          display_matrix = display_matrix.sort_values(
+              by=sort_col_t4, ascending=False, na_position="last"
+          )
+
+        col_cfg_t4 = {}
+        for m in target_months:
+          if m in display_matrix.columns:
+            col_cfg_t4[m] = st.column_config.NumberColumn(
+                f"{m} 매출", format=WON_FORMAT
+            )
+        for g_col in rate_col_names:
+          col_cfg_t4[g_col] = st.column_config.NumberColumn(
+              g_col, format="%+.1f %%"
+          )
+
+        st.dataframe(
+            display_matrix,
+            use_container_width=True,
+            hide_index=True,
+            height=500,
+            column_config=col_cfg_t4,
+        )
+
+    except Exception as e:
+      st.error(f"탭 4 오류 발생: {e}")
