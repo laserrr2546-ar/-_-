@@ -1208,7 +1208,6 @@ with tab4:
             if period_mode_t4 == "최근 6개월"
             else all_month_keys
         )
-        target_months = [key_to_label[k] for k in target_keys]
 
         if selected_store_t4 == "전체 매장 합계":
           base_df = (
@@ -1268,7 +1267,8 @@ with tab4:
               f"{latest_row['월']} 실제매출",
               f"{latest_row['실제매출']:,.0f}원",
               (
-                  f"{latest_row['증감/하락']} {latest_row['증감률(%)']:+.1f}%"
+                  f"{latest_row['증가/하락']}"
+                  f" {latest_row['증감률(%)']:+.1f}%"
                   if pd.notna(latest_row["증감률(%)"])
                   else "전월 데이터 없음"
               ),
@@ -1276,7 +1276,8 @@ with tab4:
           if prev_row is not None and pd.notna(latest_row["증감금액"]):
             k2.metric(
                 f"전월({prev_row['월']}) 대비 증감금액",
-                f"{latest_row['증감금액']:+,.0f}원 ({latest_row['증감/하락']})",
+                f"{latest_row['증감금액']:+,.0f}원"
+                f" ({latest_row['증가/하락']})",
             )
           else:
             k2.metric("전월 대비 증감금액", "-원")
@@ -1423,11 +1424,9 @@ with tab4:
             rate_col_names.append(rate_col)
             status_col_names.append(status_col)
 
-        # 한글 월 컬럼명 변경
         rename_map = {k: f"{key_to_label[k]} 매출" for k in keep_sales_keys}
         summary_table = summary_table.rename(columns=rename_map)
 
-        # 정렬 기준 선택
         sort_candidates = (
             rate_col_names
             + diff_col_names
