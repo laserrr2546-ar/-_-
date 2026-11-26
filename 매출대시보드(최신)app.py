@@ -5,13 +5,14 @@ import re
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(page_title="꾸브라꼬 통합 매출 분석 대시보드", layout="wide")
 
 st.title("🍗 꾸브라꼬 통합 매출 분석 대시보드")
-st.markdown("상단의 **탭 메뉴**를 클릭하여 각 분석 대시보드로 이동할 수 있습니다.")
+st.markdown(
+    "상단의 **탭 메뉴**를 클릭하여 각 분석 대시보드로 이동할 수 있습니다."
+)
 
 
 # -------------------------------------------------------------
@@ -72,19 +73,49 @@ def get_area(region):
 
 
 def find_date_column(df):
-  candidates = ["일자", "영업일", "날짜", "매출일자", "기준일자", "월", "년월", "연월"]
+  candidates = [
+      "일자",
+      "영업일",
+      "날짜",
+      "매출일자",
+      "기준일자",
+      "월",
+      "년월",
+      "연월",
+      "기간",
+  ]
   for c in candidates:
     if c in df.columns:
       return c
   for col in df.columns:
-    s = str(col)
-    if any(k in s for k in ["일자", "날짜", "년월", "연월"]) or s.strip() == "월":
+    s = str(col).strip()
+    if (
+        any(k in s for k in ["일자", "날짜", "년월", "연월", "기간"])
+        or s == "월"
+    ):
       return col
-  return None
+
+  best_col = None
+  best_hits = 0
+  for col in df.columns:
+    sample = df[col].dropna().astype(str).head(50)
+    if sample.empty:
+      continue
+    hits = sum(
+        1
+        for v in sample
+        if re.search(
+            r"(\d{4}[-/.년]\d{1,2}|\d{6,8}|\d{1,2}\s*월|\d{1,2}/\d{1,2}/\d{2,4})",
+            v.strip(),
+        )
+    )
+    if hits > best_hits:
+      best_hits = hits
+      best_col = col
+  return best_col if best_hits >= 3 else None
 
 
 def parse_year_month_series(series):
-  # 이미 datetime/Timestamp 타입인 경우
   if pd.api.types.is_datetime64_any_dtype(series):
     dt = pd.to_datetime(series, errors="coerce")
     return dt.dt.to_period("M").astype(str).where(dt.notna(), None)
@@ -93,36 +124,40 @@ def parse_year_month_series(series):
     if pd.isna(val):
       return None
     s = str(val).strip()
-    if not s or s in ["합계", "소계", "총계", "nan", "None"]:
+    if not s or s in ["합계", "소계", "총계", "nan", "None", "NaT", "일자"]:
       return None
 
-    # 1) YYYY-MM, YYYY/MM, YYYY.MM, YYYY년 MM월 형태
-    m = re.match(r"^(\d{4})\s*[-/.년]\s*(\d{1,2})\s*월?$", s)
+    # 1) YYYY-MM, YYYY/MM, YYYY.MM, YYYY년 MM월 (뒤에 일자나 시간 붙은 경우도 허용)
+    m = re.match(r"^(\d{4})\s*[-/.년]\s*(\d{1,2})(?:\s*[-/.월일\s].*)?$", s)
     if m:
       y, mo = int(m.group(1)), int(m.group(2))
+      if 1900 <= y <= 2100 and 1 <= mo <= 12:
+        return f"{y:04d}-{mo:02d}"
+
+    # 2) YY-MM, YY/MM, YY.MM (예: 26-10, 26.10)
+    m_yy = re.match(r"^(\d{2})\s*[-/.]\s*(\d{1,2})(?:\s*[-/.\s].*)?$", s)
+    if m_yy:
+      y = 2000 + int(m_yy.group(1))
+      mo = int(m_yy.group(2))
       if 1 <= mo <= 12:
         return f"{y:04d}-{mo:02d}"
 
-    # 2) YYYYMMDD 또는 YYYYMM 숫자/문자열 형태
+    # 3) YYYYMMDD 또는 YYYYMM 숫자/문자열
     digits = re.sub(r"\D", "", s)
-    if len(digits) == 8:
+    if len(digits) in (6, 8):
       y, mo = int(digits[:4]), int(digits[4:6])
-      if 1 <= mo <= 12:
-        return f"{y:04d}-{mo:02d}"
-    if len(digits) == 6:
-      y, mo = int(digits[:4]), int(digits[4:6])
-      if 1 <= mo <= 12:
+      if 1900 <= y <= 2100 and 1 <= mo <= 12:
         return f"{y:04d}-{mo:02d}"
 
-    # 3) 일반 날짜 파싱 시도
+    # 4) 일반 날짜 파싱 (예: 2026-10-01 00:00:00, 10/01/2026 등)
     dt = pd.to_datetime(s, errors="coerce")
-    if pd.notna(dt):
+    if pd.notna(dt) and 1900 <= dt.year <= 2100:
       return f"{dt.year:04d}-{dt.month:02d}"
 
-    # 4) '10월'처럼 월만 있는 경우 (현재 연도 기준 보완)
-    m_only = re.match(r"^(\d{1,2})\s*월$", s)
-    if m_only:
-      mo = int(m_only.group(1))
+    # 5) '10월31일', '10월 31일', '10월' 등 연도 없는 월/일 형태
+    m_kr = re.match(r"^(\d{1,2})\s*월(?:\s*\d{1,2}\s*일?)?$", s)
+    if m_kr:
+      mo = int(m_kr.group(1))
       if 1 <= mo <= 12:
         cur_year = datetime.now().year
         return f"{cur_year:04d}-{mo:02d}"
@@ -1153,7 +1188,6 @@ with tab4:
             all_months[-6:] if period_mode_t4 == "최근 6개월" else all_months
         )
 
-        # 선택 대상(전체 합계 또는 개별 매장) 월별 집계
         if selected_store_t4 == "전체 매장 합계":
           base_df = (
               data4[data4["권역"] == area_filter_t4]
@@ -1163,7 +1197,6 @@ with tab4:
         else:
           base_df = data4[data4[store_col4] == selected_store_t4]
 
-        # 전체 월 기준 증감률 계산 후 선택된 표시 기간으로 슬라이싱
         full_m_sales = (
             base_df.groupby("연월", as_index=False)["실제매출"]
             .sum()
@@ -1229,7 +1262,6 @@ with tab4:
           else:
             k3.metric("기간 내 최대 하락 월", "-")
 
-        # 차트 1: 월별 실제매출 추이
         fig_m_rev = px.bar(
             view_m_sales,
             x="연월",
@@ -1245,7 +1277,6 @@ with tab4:
         fig_m_rev.update_layout(yaxis_tickformat=",")
         st.plotly_chart(fig_m_rev, use_container_width=True)
 
-        # 차트 2: 전월 대비 매출 증감률(%) (상승/하락 모두 표시)
         rate_plot_df = view_m_sales.dropna(subset=["증감률(%)"]).copy()
         if not rate_plot_df.empty:
           rate_plot_df["색상"] = rate_plot_df["증감률(%)"].apply(
@@ -1269,7 +1300,6 @@ with tab4:
           fig_m_rate.add_hline(y=0, line_dash="dash", line_color="gray")
           st.plotly_chart(fig_m_rate, use_container_width=True)
 
-        # 월별 상세 테이블
         st.dataframe(
             view_m_sales[[
                 "연월",
@@ -1289,9 +1319,6 @@ with tab4:
             },
         )
 
-        # -----------------------------------------------------
-        # 6개월 매장별 월별 매출 및 증감률 비교 테이블
-        # -----------------------------------------------------
         st.markdown("---")
         st.subheader(
             f"📋 매장별 월별 매출 및 전월 대비 증감률 ({period_mode_t4})"
@@ -1317,7 +1344,6 @@ with tab4:
             .reindex(columns=all_months, fill_value=0)
         )
 
-        # 전월 대비 증감률 피벗 계산
         growth_cols = {}
         for idx in range(1, len(all_months)):
           prev_m = all_months[idx - 1]
@@ -1334,7 +1360,6 @@ with tab4:
             )
 
         summary_table = pivot_sales.reset_index()
-        # 표시 대상 월 매출 컬럼만 남기기
         keep_sales_cols = [store_col4, "권역", "지역"] + [
             m for m in target_months if m in pivot_sales.columns
         ]
@@ -1342,7 +1367,6 @@ with tab4:
         for g_col, g_ser in growth_cols.items():
           summary_table[g_col] = summary_table[store_col4].map(g_ser)
 
-        # 정렬 및 하락 매장 필터
         rate_col_names = list(growth_cols.keys())
         sort_col_t4 = st.selectbox(
             "정렬 기준 선택",
