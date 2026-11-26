@@ -193,6 +193,55 @@ def calc_sales_from_df(df):
   return None, "매출 계산용 '판매금액' 컬럼을 찾지 못했습니다."
 
 
+def build_monthly_summary_by_group(
+    src_df, group_cols, all_month_keys, key_to_label
+):
+  """그룹(권역/지역 등)별 월별 매출 및 전월 대비 증감금액/증감률/증가·하락 테이블 생성."""
+  piv = (
+      src_df.groupby(group_cols + ["월키"])["매출"]
+      .sum()
+      .unstack(fill_value=0)
+      .reindex(columns=all_month_keys, fill_value=0)
+  )
+  out = piv.reset_index()
+  out = out[group_cols + all_month_keys]
+
+  diff_cols = []
+  rate_cols = []
+  status_cols = []
+
+  for idx in range(1, len(all_month_keys)):
+    prev_k = all_month_keys[idx - 1]
+    curr_k = all_month_keys[idx]
+    curr_label = key_to_label[curr_k]
+    prev_label = key_to_label[prev_k]
+
+    d_col = f"{prev_label}→{curr_label} 증감금액"
+    r_col = f"{prev_label}→{curr_label} 증감률(%)"
+    s_col = f"{prev_label}→{curr_label} 증가/하락"
+
+    out[d_col] = out[curr_k] - out[prev_k]
+    out[r_col] = out.apply(
+        lambda r: (
+            round(((r[curr_k] - r[prev_k]) / r[prev_k]) * 100, 1)
+            if r[prev_k] > 0
+            else None
+        ),
+        axis=1,
+    )
+    out[s_col] = out[d_col].apply(
+        lambda d: "증가" if d > 0 else ("하락" if d < 0 else "변동없음")
+    )
+
+    diff_cols.append(d_col)
+    rate_cols.append(r_col)
+    status_cols.append(s_col)
+
+  r_map = {k: f"{key_to_label[k]} 매출" for k in all_month_keys}
+  out = out.rename(columns=r_map)
+  return out, r_map, diff_cols, rate_cols, status_cols
+
+
 WON_FORMAT = "₩%,d"
 
 # -------------------------------------------------------------
@@ -1320,7 +1369,8 @@ with tab4:
         )
 
         # -----------------------------------------------------
-        # 매장별 월별 매출 및 전월 대비 증감금액·증감률 (전체/양수/음수 탭)
+        # 매장별 월별 매출 및 전월 대비 증감금액·증감률
+        # (전체 / 양수 / 음수 / 권역별 선택 / 지역별 선택 탭)
         # -----------------------------------------------------
         st.markdown("---")
         st.subheader("📋 매장별 월별 매출 및 전월 대비 증감금액·증감률")
@@ -1338,51 +1388,14 @@ with tab4:
               matrix_base[store_col4].str.contains(kw_t4, case=False, na=False)
           ]
 
-        pivot_sales = (
-            matrix_base.groupby([store_col4, "지역", "권역", "월키"])["매출"]
-            .sum()
-            .unstack(fill_value=0)
-            .reindex(columns=all_month_keys, fill_value=0)
+        summary_table, rename_map, diff_col_names, rate_col_names, _ = (
+            build_monthly_summary_by_group(
+                matrix_base,
+                [store_col4, "권역", "지역"],
+                all_month_keys,
+                key_to_label,
+            )
         )
-
-        summary_table = pivot_sales.reset_index()
-        summary_table = summary_table[
-            [store_col4, "권역", "지역"] + all_month_keys
-        ]
-
-        diff_col_names = []
-        rate_col_names = []
-        status_col_names = []
-
-        for idx in range(1, len(all_month_keys)):
-          prev_k = all_month_keys[idx - 1]
-          curr_k = all_month_keys[idx]
-          curr_label = key_to_label[curr_k]
-          prev_label = key_to_label[prev_k]
-
-          diff_col = f"{prev_label}→{curr_label} 증감금액"
-          rate_col = f"{prev_label}→{curr_label} 증감률(%)"
-          status_col = f"{prev_label}→{curr_label} 증가/하락"
-
-          summary_table[diff_col] = summary_table[curr_k] - summary_table[prev_k]
-          summary_table[rate_col] = summary_table.apply(
-              lambda r: (
-                  round(((r[curr_k] - r[prev_k]) / r[prev_k]) * 100, 1)
-                  if r[prev_k] > 0
-                  else None
-              ),
-              axis=1,
-          )
-          summary_table[status_col] = summary_table[diff_col].apply(
-              lambda d: "증가" if d > 0 else ("하락" if d < 0 else "변동없음")
-          )
-
-          diff_col_names.append(diff_col)
-          rate_col_names.append(rate_col)
-          status_col_names.append(status_col)
-
-        rename_map = {k: f"{key_to_label[k]} 매출" for k in all_month_keys}
-        summary_table = summary_table.rename(columns=rename_map)
 
         compare_col_t4 = st.selectbox(
             "비교 기준 월 선택",
@@ -1406,10 +1419,12 @@ with tab4:
               r_col, format="%+.1f%%"
           )
 
-        all_tab, pos_tab, neg_tab = st.tabs([
+        all_tab, pos_tab, neg_tab, area_tab, region_tab = st.tabs([
             "📋 전체 매장",
             "📈 양수 매장 (증가)",
             "📉 음수 매장 (하락)",
+            "🗺️ 권역별 선택",
+            "📍 지역별 선택",
         ])
 
         with all_tab:
@@ -1450,6 +1465,118 @@ with tab4:
               use_container_width=True,
               hide_index=True,
               height=500,
+              column_config=col_cfg_t4,
+          )
+
+        with area_tab:
+          area_options_tab = ["전체 권역"] + sorted(
+              data4["권역"].unique().tolist()
+          )
+          sel_area_tab = st.selectbox(
+              "권역 선택", area_options_tab, key="tab4_inner_area"
+          )
+          area_src = (
+              data4.copy()
+              if sel_area_tab == "전체 권역"
+              else data4[data4["권역"] == sel_area_tab].copy()
+          )
+
+          area_summary, a_rmap, a_dcols, a_rcols, _ = (
+              build_monthly_summary_by_group(
+                  area_src, ["권역"], all_month_keys, key_to_label
+              )
+          )
+          a_cfg = {}
+          for k in all_month_keys:
+            a_cfg[a_rmap[k]] = st.column_config.NumberColumn(
+                a_rmap[k], format=WON_FORMAT
+            )
+          for d_col in a_dcols:
+            a_cfg[d_col] = st.column_config.NumberColumn(
+                d_col, format="₩%+,.0f"
+            )
+          for r_col in a_rcols:
+            a_cfg[r_col] = st.column_config.NumberColumn(
+                r_col, format="%+.1f%%"
+            )
+
+          st.markdown("##### 권역 월별 합계 및 전월 대비 증감")
+          st.dataframe(
+              area_summary,
+              use_container_width=True,
+              hide_index=True,
+              column_config=a_cfg,
+          )
+
+          st.markdown("##### 해당 권역 매장별 상세")
+          area_stores_df = summary_table.copy()
+          if sel_area_tab != "전체 권역":
+            area_stores_df = area_stores_df[
+                area_stores_df["권역"] == sel_area_tab
+            ]
+          st.dataframe(
+              area_stores_df.sort_values(
+                  by=compare_col_t4, ascending=False, na_position="last"
+              ),
+              use_container_width=True,
+              hide_index=True,
+              height=450,
+              column_config=col_cfg_t4,
+          )
+
+        with region_tab:
+          reg_options_tab = ["전체 지역"] + sorted(
+              data4["지역"].unique().tolist()
+          )
+          sel_reg_tab = st.selectbox(
+              "지역 선택", reg_options_tab, key="tab4_inner_region"
+          )
+          reg_src = (
+              data4.copy()
+              if sel_reg_tab == "전체 지역"
+              else data4[data4["지역"] == sel_reg_tab].copy()
+          )
+
+          reg_summary, r_rmap, r_dcols, r_rcols, _ = (
+              build_monthly_summary_by_group(
+                  reg_src, ["권역", "지역"], all_month_keys, key_to_label
+              )
+          )
+          r_cfg = {}
+          for k in all_month_keys:
+            r_cfg[r_rmap[k]] = st.column_config.NumberColumn(
+                r_rmap[k], format=WON_FORMAT
+            )
+          for d_col in r_dcols:
+            r_cfg[d_col] = st.column_config.NumberColumn(
+                d_col, format="₩%+,.0f"
+            )
+          for r_col in r_rcols:
+            r_cfg[r_col] = st.column_config.NumberColumn(
+                r_col, format="%+.1f%%"
+            )
+
+          st.markdown("##### 지역 월별 합계 및 전월 대비 증감")
+          st.dataframe(
+              reg_summary,
+              use_container_width=True,
+              hide_index=True,
+              column_config=r_cfg,
+          )
+
+          st.markdown("##### 해당 지역 매장별 상세")
+          reg_stores_df = summary_table.copy()
+          if sel_reg_tab != "전체 지역":
+            reg_stores_df = reg_stores_df[
+                reg_stores_df["지역"] == sel_reg_tab
+            ]
+          st.dataframe(
+              reg_stores_df.sort_values(
+                  by=compare_col_t4, ascending=False, na_position="last"
+              ),
+              use_container_width=True,
+              hide_index=True,
+              height=450,
               column_config=col_cfg_t4,
           )
 
