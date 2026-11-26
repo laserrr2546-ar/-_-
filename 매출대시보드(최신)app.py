@@ -242,16 +242,116 @@ def build_monthly_summary_by_group(
   return out, r_map, diff_cols, rate_cols, status_cols
 
 
+# -------------------------------------------------------------
+# [탭 5 전용 로더] 주차별 / 권역·지역별 / 플랫폼별 분석용
+# -------------------------------------------------------------
+def parse_week_dt(val):
+  if pd.isna(val):
+    return None
+  if isinstance(val, (datetime, pd.Timestamp)):
+    return pd.Timestamp(val)
+  s = str(val).strip()
+  m = re.search(r"(\d+)\s*월\s*(\d+)\s*일", s)
+  if m:
+    try:
+      return datetime(datetime.now().year, int(m.group(1)), int(m.group(2)))
+    except ValueError:
+      return None
+  dt = pd.to_datetime(s, errors="coerce")
+  return dt if pd.notna(dt) else None
+
+
+@st.cache_data
+def load_weekly_store_data(file_bytes):
+  raw = pd.read_excel(io.BytesIO(file_bytes), header=None, nrows=5)
+  header_row_idx = 0
+  for i in range(len(raw)):
+    row_values = [str(v) for v in raw.iloc[i].tolist()]
+    if any("매장명" in v for v in row_values):
+      header_row_idx = i
+      break
+
+  df = pd.read_excel(io.BytesIO(file_bytes), header=header_row_idx)
+  date_col = find_date_column(df) or "일자"
+  store_col = next((c for c in df.columns if "매장명" in str(c)), "매장명")
+
+  data = df[
+      ~df[date_col].astype(str).str.contains("합계|소계|총계", na=False)
+  ].copy()
+  data = data[
+      ~data[store_col].astype(str).str.contains("합계|소계|총계", na=False)
+  ].copy()
+  data[store_col] = data[store_col].astype(str).str.strip()
+
+  data["DT"] = data[date_col].apply(parse_week_dt)
+  data = data.dropna(subset=["DT"])
+
+  data["IsoWeek"] = data["DT"].dt.isocalendar().week.astype(int)
+
+  def _week_label(row):
+    dt = row["DT"]
+    start_of_week = dt - pd.Timedelta(days=dt.weekday())
+    end_of_week = start_of_week + pd.Timedelta(days=6)
+    return (
+        f"W{row['IsoWeek']:02d}"
+        f" ({start_of_week.strftime('%m.%d')}~{end_of_week.strftime('%m.%d')})"
+    )
+
+  data["주차명"] = data.apply(_week_label, axis=1)
+
+  sales_s, err = calc_sales_from_df(data)
+  if err:
+    raise ValueError(err)
+  data["실매출"] = sales_s
+  data["지역"] = data[store_col].apply(get_region)
+  data["권역"] = data["지역"].apply(get_area)
+  data["_store_col"] = store_col
+  data["_date_col"] = date_col
+  return data
+
+
+@st.cache_data
+def load_weekly_platform_data(file_bytes):
+  df = pd.read_excel(io.BytesIO(file_bytes), header=1)
+  data = df[
+      ~df["일자"].astype(str).str.contains("합계|소계|총계", na=False)
+  ].copy()
+  data["DT"] = pd.to_datetime(data["일자"], errors="coerce")
+  data = data.dropna(subset=["DT"])
+
+  data["IsoWeek"] = data["DT"].dt.isocalendar().week.astype(int)
+
+  def _week_label(row):
+    dt = row["DT"]
+    start_of_week = dt - pd.Timedelta(days=dt.weekday())
+    end_of_week = start_of_week + pd.Timedelta(days=6)
+    return (
+        f"W{row['IsoWeek']:02d}"
+        f" ({start_of_week.strftime('%m.%d')}~{end_of_week.strftime('%m.%d')})"
+    )
+
+  data["주차명"] = data.apply(_week_label, axis=1)
+  data["주문건수"] = pd.to_numeric(data["건수"], errors="coerce").fillna(0)
+  data["실매출"] = pd.to_numeric(data["실 매출액"], errors="coerce").fillna(0)
+  data["주문구분"] = data["주문구분"].fillna("기타").astype(str).str.strip()
+  data["주문채널"] = data["주문채널"].fillna("기타").astype(str).str.strip()
+  data["주문채널 상세"] = (
+      data["주문채널 상세"].fillna("기타").astype(str).str.strip()
+  )
+  return data
+
+
 WON_FORMAT = "₩%,d"
 
 # -------------------------------------------------------------
 # [탭 메뉴 구성]
 # -------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 매출 및 휴무일 대시보드",
     "🍗 메뉴별 판매 분석 대시보드",
     "🛵 채널/플랫폼 심층 분석 대시보드",
     "📈 월별 매출 증감률 추이",
+    "📅 주차별·플랫폼별 분석",
 ])
 
 # =============================================================
@@ -1582,3 +1682,624 @@ with tab4:
 
     except Exception as e:
       st.error(f"탭 4 오류 발생: {e}")
+
+# =============================================================
+# [TAB 5] 주차별·플랫폼별 분석 (추가 통합 탭)
+# =============================================================
+with tab5:
+  st.header("📅 매장별 / 주차별 / 플랫폼별 매출 분석")
+  st.markdown(
+      "매출은 **(판매금액 - 채널배달료)**로 계산하며, 주차별 추이 및"
+      " 플랫폼(주문경로)별 주차 매출을 함께 분석합니다."
+  )
+
+  up_c1, up_c2 = st.columns(2)
+  with up_c1:
+    w_store_file = st.file_uploader(
+        "1. 기간별 매출분석 엑셀 (매장별)",
+        type=["xlsx", "xls"],
+        key="tab5_store_file",
+    )
+  with up_c2:
+    w_plat_file = st.file_uploader(
+        "2. 주문경로별 매출분석 엑셀 (플랫폼별)",
+        type=["xlsx", "xls"],
+        key="tab5_plat_file",
+    )
+
+  if w_store_file is not None or w_plat_file is not None:
+    try:
+      w_data = (
+          load_weekly_store_data(w_store_file.getvalue())
+          if w_store_file is not None
+          else None
+      )
+      wp_data = (
+          load_weekly_platform_data(w_plat_file.getvalue())
+          if w_plat_file is not None
+          else None
+      )
+
+      all_w_labels = sorted(
+          set(w_data["주차명"].unique() if w_data is not None else [])
+          | set(wp_data["주차명"].unique() if wp_data is not None else [])
+      )
+
+      st.markdown("---")
+      fc5_1, fc5_2 = st.columns([1.6, 1.4])
+      with fc5_1:
+        sel_w_labels = st.multiselect(
+            "주차 선택 (공통 적용)",
+            options=all_w_labels,
+            default=all_w_labels,
+            key="tab5_weeks",
+        )
+      with fc5_2:
+        if w_data is not None:
+          sel_w_areas = st.multiselect(
+              "권역 선택 (매장 분석용)",
+              options=sorted(w_data["권역"].unique().tolist()),
+              default=sorted(w_data["권역"].unique().tolist()),
+              key="tab5_areas",
+          )
+        else:
+          sel_w_areas = []
+
+      fw_data = (
+          w_data[
+              (w_data["주차명"].isin(sel_w_labels))
+              & (w_data["권역"].isin(sel_w_areas))
+          ].copy()
+          if w_data is not None
+          else None
+      )
+      fwp_data = (
+          wp_data[wp_data["주차명"].isin(sel_w_labels)].copy()
+          if wp_data is not None
+          else None
+      )
+
+      w_weeks = (
+          sorted(fw_data["IsoWeek"].unique().tolist())
+          if fw_data is not None
+          else []
+      )
+      wp_weeks = (
+          sorted(fwp_data["IsoWeek"].unique().tolist())
+          if fwp_data is not None
+          else []
+      )
+
+      kpi5_1, kpi5_2, kpi5_3, kpi5_4 = st.columns(4)
+      if fw_data is not None:
+        w_store_col = fw_data["_store_col"].iloc[0]
+        kpi5_1.metric("총 실매출", f"{fw_data['실매출'].sum():,.0f} 원")
+        kpi5_2.metric("건당 평균 실매출", f"{fw_data['실매출'].mean():,.0f} 원")
+        kpi5_3.metric(
+            "운영 매장 수", f"{fw_data[w_store_col].nunique():,} 개"
+        )
+        kpi5_4.metric("총 매출 건수", f"{len(fw_data):,} 건")
+      elif fwp_data is not None:
+        p_tot_s = fwp_data["실매출"].sum()
+        p_tot_o = fwp_data["주문건수"].sum()
+        p_avg_o = p_tot_s / p_tot_o if p_tot_o > 0 else 0
+        kpi5_1.metric("플랫폼 총 실매출", f"{p_tot_s:,.0f} 원")
+        kpi5_2.metric("주문당 평균 단가", f"{p_avg_o:,.0f} 원")
+        kpi5_3.metric(
+            "활성 주문채널 수", f"{fwp_data['주문채널'].nunique():,} 개"
+        )
+        kpi5_4.metric("총 주문 건수", f"{p_tot_o:,.0f} 건")
+
+      st.markdown("---")
+      st5_1, st5_2, st5_3, st5_4 = st.tabs([
+          "🗓️ 주차별 분석",
+          "🗺️ 권역/지역별 분석",
+          "📱 플랫폼(주문경로)별 분석",
+          "📄 상세 데이터",
+      ])
+
+      # --- [탭 5 - 1] 주차별 분석 ---
+      with st5_1:
+        if fw_data is None:
+          st.info(
+              "위에서 **[1. 기간별 매출분석 엑셀 (매장별)]**을 업로드하면"
+              " 매장 기준 주차별 분석이 표시됩니다."
+          )
+        else:
+          st.subheader("주차별 매출 요약")
+          weekly_summary = (
+              fw_data.groupby("주차명")["실매출"]
+              .agg(["sum", "mean", "count"])
+              .reset_index()
+          )
+          weekly_summary.columns = [
+              "주차명",
+              "주간 총매출",
+              "건당 평균매출",
+              "매출 발생 건수",
+          ]
+          total_w_sum = weekly_summary["주간 총매출"].sum()
+          weekly_summary["매출 비중(%)"] = (
+              weekly_summary["주간 총매출"] / total_w_sum * 100
+              if total_w_sum > 0
+              else 0
+          )
+
+          st.dataframe(
+              weekly_summary,
+              use_container_width=True,
+              hide_index=True,
+              column_config={
+                  "주간 총매출": st.column_config.NumberColumn(
+                      "주간 총매출", format=WON_FORMAT
+                  ),
+                  "건당 평균매출": st.column_config.NumberColumn(
+                      "건당 평균매출", format=WON_FORMAT
+                  ),
+                  "매출 발생 건수": st.column_config.NumberColumn(
+                      "매출 발생 건수", format="%d건"
+                  ),
+                  "매출 비중(%)": st.column_config.NumberColumn(
+                      "매출 비중(%)", format="%.2f%%"
+                  ),
+              },
+          )
+
+          st.plotly_chart(
+              px.bar(
+                  weekly_summary,
+                  x="주차명",
+                  y="주간 총매출",
+                  text_auto=",",
+                  title="주차별 실매출 비교",
+              ),
+              use_container_width=True,
+          )
+
+          st.subheader("매장별 주차별 매출 비교 및 휴무일 현황")
+          w_store_col = fw_data["_store_col"].iloc[0]
+          week_days_total = fw_data.groupby("IsoWeek")["DT"].nunique().to_dict()
+
+          if len(w_weeks) == 0:
+            st.warning("선택된 데이터가 없습니다.")
+          else:
+            sales_pivot = fw_data.pivot_table(
+                index=[w_store_col, "권역", "지역"],
+                columns="IsoWeek",
+                values="실매출",
+                aggfunc="sum",
+                fill_value=0,
+            )
+            sales_pivot.columns = [
+                f"{col}주차 매출" for col in sales_pivot.columns
+            ]
+
+            days_pivot = fw_data.pivot_table(
+                index=[w_store_col, "권역", "지역"],
+                columns="IsoWeek",
+                values="DT",
+                aggfunc="nunique",
+                fill_value=0,
+            )
+
+            closed_pivot = pd.DataFrame(index=days_pivot.index)
+            for col in days_pivot.columns:
+              closed_pivot[f"{col}주차 휴무일"] = (
+                  week_days_total[col] - days_pivot[col]
+              )
+
+            store_summary = pd.concat(
+                [sales_pivot, closed_pivot], axis=1
+            ).reset_index()
+
+            if len(w_weeks) >= 2:
+              curr_wk = w_weeks[-1]
+              prev_wk = w_weeks[-2]
+              store_summary["매출 증감액(최근2주)"] = (
+                  store_summary[f"{curr_wk}주차 매출"]
+                  - store_summary[f"{prev_wk}주차 매출"]
+              )
+              store_summary = store_summary.sort_values(
+                  by=f"{curr_wk}주차 매출", ascending=False
+              ).reset_index(drop=True)
+            else:
+              store_summary = store_summary.sort_values(
+                  by=f"{w_weeks[0]}주차 매출", ascending=False
+              ).reset_index(drop=True)
+
+            search_q5 = st.text_input(
+                "🔍 특정 매장 검색",
+                placeholder="조회할 매장명을 입력하세요 (예: 부산 정관점)",
+                key="tab5_store_search",
+            )
+            display_w_df = (
+                store_summary[
+                    store_summary[w_store_col].str.contains(
+                        search_q5, na=False
+                    )
+                ]
+                if search_q5
+                else store_summary
+            )
+
+            base_w_cols = [w_store_col, "권역", "지역"]
+            w_sales_cols = [f"{w}주차 매출" for w in w_weeks]
+            w_closed_cols = [f"{w}주차 휴무일" for w in w_weeks]
+            final_w_cols = base_w_cols + w_sales_cols
+            if len(w_weeks) >= 2:
+              final_w_cols.append("매출 증감액(최근2주)")
+            final_w_cols += w_closed_cols
+
+            display_w_df = display_w_df[final_w_cols]
+            chart_w_df = (
+                display_w_df if search_q5 else display_w_df.head(20)
+            )
+
+            if len(chart_w_df) > 0 and len(w_weeks) >= 2:
+              curr_col = f"{curr_wk}주차 매출"
+              prev_col = f"{prev_wk}주차 매출"
+              chart_melted = chart_w_df.melt(
+                  id_vars=[w_store_col],
+                  value_vars=[prev_col, curr_col],
+                  var_name="주차",
+                  value_name="매출액",
+              )
+              fig_w_store = px.bar(
+                  chart_melted,
+                  x="매출액",
+                  y=w_store_col,
+                  color="주차",
+                  barmode="group",
+                  orientation="h",
+                  title=(
+                      "검색된 매장 주간 매출 비교"
+                      if search_q5
+                      else "상위 20개 매장 주간 매출 비교"
+                  ),
+              )
+              fig_w_store.update_layout(
+                  yaxis={"categoryorder": "total ascending"}
+              )
+              st.plotly_chart(fig_w_store, use_container_width=True)
+            elif len(chart_w_df) > 0 and len(w_weeks) == 1:
+              col_name = f"{w_weeks[0]}주차 매출"
+              fig_w_store = px.bar(
+                  chart_w_df,
+                  x=col_name,
+                  y=w_store_col,
+                  orientation="h",
+                  title=(
+                      "검색된 매장 주간 매출"
+                      if search_q5
+                      else "상위 20개 매장 주간 매출"
+                  ),
+              )
+              fig_w_store.update_layout(
+                  yaxis={"categoryorder": "total ascending"}
+              )
+              st.plotly_chart(fig_w_store, use_container_width=True)
+
+            w_col_cfg = {}
+            for col in w_sales_cols:
+              w_col_cfg[col] = st.column_config.NumberColumn(
+                  col, format=WON_FORMAT
+              )
+            if "매출 증감액(최근2주)" in final_w_cols:
+              w_col_cfg["매출 증감액(최근2주)"] = st.column_config.NumberColumn(
+                  "매출 증감액(최근2주)", format="₩%+,.0f"
+              )
+            for col in w_closed_cols:
+              w_col_cfg[col] = st.column_config.NumberColumn(
+                  col, format="%d일"
+              )
+
+            st.dataframe(
+                display_w_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config=w_col_cfg,
+            )
+
+      # --- [탭 5 - 2] 권역/지역별 분석 ---
+      with st5_2:
+        if fw_data is None:
+          st.info(
+              "위에서 **[1. 기간별 매출분석 엑셀 (매장별)]**을 업로드해주세요."
+          )
+        else:
+          w_store_col = fw_data["_store_col"].iloc[0]
+          st.subheader("권역 및 지역별 실매출 분포")
+          sub_w1, sub_w2 = st.tabs(["🗺️ 권역별 분석", "📍 상세지역별 분석"])
+
+          with sub_w1:
+            area_summary = (
+                fw_data.groupby("권역", as_index=False)
+                .agg(
+                    총매출=("실매출", "sum"),
+                    매장수=(w_store_col, "nunique"),
+                )
+                .sort_values(by="총매출", ascending=False)
+            )
+            st.plotly_chart(
+                px.pie(
+                    area_summary,
+                    values="총매출",
+                    names="권역",
+                    title="권역별 총 실매출 비중",
+                    hole=0.4,
+                ),
+                use_container_width=True,
+            )
+
+            st.markdown("#### 📊 권역별 주차별 매출 상세")
+            if len(w_weeks) > 0:
+              area_sales_pivot = fw_data.pivot_table(
+                  index=["권역"],
+                  columns="IsoWeek",
+                  values="실매출",
+                  aggfunc="sum",
+                  fill_value=0,
+              )
+              area_sales_pivot.columns = [
+                  f"{col}주차 매출" for col in area_sales_pivot.columns
+              ]
+              area_detail = pd.merge(
+                  area_summary,
+                  area_sales_pivot.reset_index(),
+                  on=["권역"],
+                  how="left",
+              )
+              if len(w_weeks) >= 2:
+                area_detail["매출 증감액(최근2주)"] = (
+                    area_detail[f"{w_weeks[-1]}주차 매출"]
+                    - area_detail[f"{w_weeks[-2]}주차 매출"]
+                )
+
+              area_cfg = {
+                  "총매출": st.column_config.NumberColumn(
+                      "총매출", format=WON_FORMAT
+                  ),
+                  "매장수": st.column_config.NumberColumn(
+                      "매장수", format="%d개"
+                  ),
+              }
+              for col in area_sales_pivot.columns:
+                area_cfg[col] = st.column_config.NumberColumn(
+                    col, format=WON_FORMAT
+                )
+              if "매출 증감액(최근2주)" in area_detail.columns:
+                area_cfg["매출 증감액(최근2주)"] = st.column_config.NumberColumn(
+                    "매출 증감액(최근2주)", format="₩%+,.0f"
+                )
+              st.dataframe(
+                  area_detail,
+                  use_container_width=True,
+                  hide_index=True,
+                  column_config=area_cfg,
+              )
+
+          with sub_w2:
+            region_summary = (
+                fw_data.groupby(["권역", "지역"], as_index=False)
+                .agg(
+                    총매출=("실매출", "sum"),
+                    매장수=(w_store_col, "nunique"),
+                )
+                .sort_values(by="총매출", ascending=False)
+            )
+            st.plotly_chart(
+                px.bar(
+                    region_summary,
+                    x="지역",
+                    y="총매출",
+                    color="권역",
+                    title="상세지역별 총 실매출 현황",
+                ),
+                use_container_width=True,
+            )
+
+            st.markdown("#### 📊 상세지역별 주차별 매출 상세")
+            if len(w_weeks) > 0:
+              region_sales_pivot = fw_data.pivot_table(
+                  index=["권역", "지역"],
+                  columns="IsoWeek",
+                  values="실매출",
+                  aggfunc="sum",
+                  fill_value=0,
+              )
+              region_sales_pivot.columns = [
+                  f"{col}주차 매출" for col in region_sales_pivot.columns
+              ]
+              region_detail = pd.merge(
+                  region_summary,
+                  region_sales_pivot.reset_index(),
+                  on=["권역", "지역"],
+                  how="left",
+              )
+              if len(w_weeks) >= 2:
+                region_detail["매출 증감액(최근2주)"] = (
+                    region_detail[f"{w_weeks[-1]}주차 매출"]
+                    - region_detail[f"{w_weeks[-2]}주차 매출"]
+                )
+
+              reg_cfg = {
+                  "총매출": st.column_config.NumberColumn(
+                      "총매출", format=WON_FORMAT
+                  ),
+                  "매장수": st.column_config.NumberColumn(
+                      "매장수", format="%d개"
+                  ),
+              }
+              for col in region_sales_pivot.columns:
+                reg_cfg[col] = st.column_config.NumberColumn(
+                    col, format=WON_FORMAT
+                )
+              if "매출 증감액(최근2주)" in region_detail.columns:
+                reg_cfg["매출 증감액(최근2주)"] = st.column_config.NumberColumn(
+                    "매출 증감액(최근2주)", format="₩%+,.0f"
+                )
+              st.dataframe(
+                  region_detail,
+                  use_container_width=True,
+                  hide_index=True,
+                  column_config=reg_cfg,
+              )
+
+      # --- [탭 5 - 3] 플랫폼(주문경로)별 분석 ---
+      with st5_3:
+        st.subheader("📱 플랫폼(주문경로) 주차별 실매출 분석")
+        if fwp_data is None:
+          st.info(
+              "위에서 **[2. 주문경로별 매출분석 엑셀 (플랫폼별)]**을"
+              " 업로드해주세요."
+          )
+        elif len(wp_weeks) == 0:
+          st.warning("선택된 주차에 해당하는 플랫폼 매출 데이터가 없습니다.")
+        else:
+          channel_col = st.radio(
+              "집계 기준 선택",
+              options=["주문채널", "주문채널 상세"],
+              horizontal=True,
+              key="tab5_plat_channel_col",
+          )
+
+          plat_summary = (
+              fwp_data.groupby(["주문구분", channel_col], as_index=False)
+              .agg(총실매출=("실매출", "sum"), 총주문건수=("주문건수", "sum"))
+              .sort_values(by="총실매출", ascending=False)
+          )
+          total_p_rev = plat_summary["총실매출"].sum()
+          plat_summary["매출 비중(%)"] = (
+              plat_summary["총실매출"] / total_p_rev * 100
+              if total_p_rev > 0
+              else 0
+          )
+
+          pc1, pc2 = st.columns(2)
+          with pc1:
+            st.plotly_chart(
+                px.pie(
+                    plat_summary,
+                    values="총실매출",
+                    names=channel_col,
+                    title=f"{channel_col}별 총 실매출 비중",
+                    hole=0.4,
+                ),
+                use_container_width=True,
+            )
+          with pc2:
+            weekly_plat_chart = (
+                fwp_data.groupby(["주차명", channel_col], as_index=False)[
+                    "실매출"
+                ]
+                .sum()
+                .sort_values(by=["주차명", "실매출"], ascending=[True, False])
+            )
+            st.plotly_chart(
+                px.bar(
+                    weekly_plat_chart,
+                    x="주차명",
+                    y="실매출",
+                    color=channel_col,
+                    barmode="group",
+                    title=f"주차별 {channel_col} 실매출 비교",
+                ),
+                use_container_width=True,
+            )
+
+          st.markdown(f"#### 📊 {channel_col}별 주차별 매출 상세표")
+          plat_pivot = fwp_data.pivot_table(
+              index=["주문구분", channel_col],
+              columns="IsoWeek",
+              values="실매출",
+              aggfunc="sum",
+              fill_value=0,
+          )
+          plat_pivot.columns = [
+              f"{col}주차 매출" for col in plat_pivot.columns
+          ]
+          plat_detail = pd.merge(
+              plat_summary,
+              plat_pivot.reset_index(),
+              on=["주문구분", channel_col],
+              how="left",
+          )
+          if len(wp_weeks) >= 2:
+            plat_detail["매출 증감액(최근2주)"] = (
+                plat_detail[f"{wp_weeks[-1]}주차 매출"]
+                - plat_detail[f"{wp_weeks[-2]}주차 매출"]
+            )
+
+          plat_cfg = {
+              "총실매출": st.column_config.NumberColumn(
+                  "총실매출", format=WON_FORMAT
+              ),
+              "총주문건수": st.column_config.NumberColumn(
+                  "총주문건수", format="%d건"
+              ),
+              "매출 비중(%)": st.column_config.NumberColumn(
+                  "매출 비중(%)", format="%.2f%%"
+              ),
+          }
+          for col in plat_pivot.columns:
+            plat_cfg[col] = st.column_config.NumberColumn(
+                col, format=WON_FORMAT
+            )
+          if "매출 증감액(최근2주)" in plat_detail.columns:
+            plat_cfg["매출 증감액(최근2주)"] = st.column_config.NumberColumn(
+                "매출 증감액(최근2주)", format="₩%+,.0f"
+            )
+          st.dataframe(
+              plat_detail,
+              use_container_width=True,
+              hide_index=True,
+              column_config=plat_cfg,
+          )
+
+      # --- [탭 5 - 4] 상세 데이터 ---
+      with st5_4:
+        if fw_data is not None:
+          w_store_col = fw_data["_store_col"].iloc[0]
+          w_date_col = fw_data["_date_col"].iloc[0]
+          st.subheader("전체 매장별 필터링 데이터 목록")
+          show_cols = [
+              c
+              for c in [
+                  w_date_col,
+                  "주차명",
+                  "권역",
+                  "지역",
+                  w_store_col,
+                  "판매금액",
+                  "채널배달료(매출제외)",
+                  "실매출",
+              ]
+              if c in fw_data.columns
+          ]
+          st.dataframe(
+              fw_data[show_cols], use_container_width=True, hide_index=True
+          )
+
+        if fwp_data is not None:
+          st.subheader("전체 플랫폼(주문경로)별 필터링 데이터 목록")
+          st.dataframe(
+              fwp_data[[
+                  "일자",
+                  "주차명",
+                  "주문구분",
+                  "주문채널",
+                  "주문채널 상세",
+                  "주문건수",
+                  "실매출",
+              ]],
+              use_container_width=True,
+              hide_index=True,
+          )
+
+    except Exception as e:
+      st.error(f"탭 5 오류 발생: {e}")
+  else:
+    st.info(
+        "위에서 분석할 엑셀 파일(.xlsx)을 업로드해주세요. (매장별 파일,"
+        " 주문경로별 파일 개별 또는 동시 업로드 가능)"
+    )
