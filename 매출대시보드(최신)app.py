@@ -2,12 +2,17 @@ import glob
 import io
 import os
 import re
-from datetime import datetime
+from datetime import datetime, time
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="꾸브라꼬 통합 매출 분석 대시보드", layout="wide")
+st.set_page_config(
+    page_title="꾸브라꼬 통합 매출 분석 대시보드",
+    page_icon="🍗",
+    layout="wide",
+)
 
 st.title("🍗 꾸브라꼬 통합 매출 분석 대시보드")
 st.markdown("상단의 **탭 메뉴**를 클릭하여 각 분석 대시보드로 이동할 수 있습니다.")
@@ -280,11 +285,9 @@ def get_menu_type(raw_menu, sale_price):
   m_no_space = m.replace(" ", "").replace("℃", "도")
   is_zero_price = pd.isna(sale_price) or sale_price <= 0
 
-  # 1. 판매가가 0원인 경우 세트/단품 등 집계에서 모두 제외
   if is_zero_price:
     return "제외(기타)"
 
-  # 2. 순살 변경 옵션들 처리 (주문 건수 중복 집계 방지)
   if "안함" in m_no_space:
     return "제외(기타)"
 
@@ -302,15 +305,12 @@ def get_menu_type(raw_menu, sale_price):
     else:
       return "제외(기타)"
 
-  # 배달, 포장, 홀매출 등 기타 키워드 제외
   if "배달" in m or "포장" in m_no_space or "홀매출" in m_no_space:
     return "제외(기타)"
 
-  # 3. 세트 기준: '두마리세트'가 포함된 메뉴만 세트로 분류
   if "두마리세트" in m_no_space:
     return "세트"
 
-  # 4. 사이드 판별
   if any(
       k in m
       for k in [
@@ -337,7 +337,6 @@ def get_menu_type(raw_menu, sale_price):
     ):
       return "사이드"
 
-  # 5. 단품 기준: 지정된 11개 주력 메뉴에 해당하고 판매가(>0원)가 붙어있는 경우만 단품으로 집계
   single_target_menus = [
       "170도후라이드",
       "170도양념치킨",
@@ -468,17 +467,318 @@ def load_weekly_platform_data(file_bytes):
   return data
 
 
+# -------------------------------------------------------------
+# [탭 6 전용] 매장 영업현황(개점·마감시간 / 이상 영업) 함수
+# -------------------------------------------------------------
+OPEN_CLOSE_REQUIRED_COLUMNS = [
+    "영업일",
+    "매장코드",
+    "매장명",
+    "지사명",
+    "지역",
+    "개점시간",
+    "마감시간",
+    "총운영시간",
+]
+
+OPEN_CLOSE_AREA_ORDER = ["수도권", "영남권", "호남권", "제주권", "기타"]
+
+
+def parse_oc_datetime(series):
+  return pd.to_datetime(series, errors="coerce")
+
+
+def oc_time_minutes(value):
+  if pd.isna(value):
+    return np.nan
+  return int(value.hour) * 60 + int(value.minute) + int(value.second) / 60
+
+
+def oc_circular_average_time(series):
+  values = pd.to_datetime(series, errors="coerce").dropna()
+  if values.empty:
+    return None
+
+  minutes = (
+      values.dt.hour * 60 + values.dt.minute + values.dt.second / 60
+  ).to_numpy()
+
+  angles = 2 * np.pi * minutes / 1440
+  sin_mean = np.sin(angles).mean()
+  cos_mean = np.cos(angles).mean()
+
+  angle = np.arctan2(sin_mean, cos_mean)
+  if angle < 0:
+    angle += 2 * np.pi
+
+  avg_minutes = int(round(angle * 1440 / (2 * np.pi))) % 1440
+  return time(hour=avg_minutes // 60, minute=avg_minutes % 60)
+
+
+def oc_circular_difference_minutes(actual, baseline):
+  if (
+      actual is None
+      or baseline is None
+      or pd.isna(actual)
+      or pd.isna(baseline)
+  ):
+    return np.nan
+  diff = oc_time_minutes(actual) - oc_time_minutes(baseline)
+  return (diff + 720) % 1440 - 720
+
+
+def oc_format_time(value):
+  return value.strftime("%H:%M") if value is not None else "-"
+
+
+def oc_format_duration(hours):
+  if pd.isna(hours):
+    return "-"
+  total_minutes = int(round(float(hours) * 60))
+  sign = "-" if total_minutes < 0 else ""
+  total_minutes = abs(total_minutes)
+  return f"{sign}{total_minutes // 60}시간 {total_minutes % 60:02d}분"
+
+
+def oc_format_deviation(minutes):
+  if pd.isna(minutes):
+    return "-"
+  rounded = int(round(minutes))
+  if rounded == 0:
+    return "평균과 동일"
+  direction = "늦음" if rounded > 0 else "빠름"
+  value = abs(rounded)
+  return f"{value // 60}시간 {value % 60:02d}분 {direction}"
+
+
+def oc_map_region_to_area(region_val):
+  r = "" if pd.isna(region_val) else str(region_val).strip()
+  if r in [
+      "중부권",
+      "강원권",
+      "경기권",
+      "수도권",
+      "서울",
+      "경기",
+      "인천",
+      "대전",
+      "충청(충남/충북)",
+      "충남",
+      "충북",
+  ]:
+    return "수도권"
+  if r in ["경상", "경북", "부산", "경상(경남/경북)", "경남", "울산", "대구"]:
+    return "영남권"
+  if r in ["전남", "전북", "광주", "전라(전남/전북)"]:
+    return "호남권"
+  if r == "제주":
+    return "제주권"
+  return "기타"
+
+
+def oc_prepare_data(raw):
+  raw = raw.copy()
+  raw.columns = [str(c).strip() for c in raw.columns]
+
+  missing = [c for c in OPEN_CLOSE_REQUIRED_COLUMNS if c not in raw.columns]
+  if missing:
+    raise ValueError("필수 컬럼을 찾을 수 없습니다: " + ", ".join(missing))
+
+  df = raw[OPEN_CLOSE_REQUIRED_COLUMNS].copy()
+  df["영업일"] = parse_oc_datetime(df["영업일"]).dt.normalize()
+  df["개점시간"] = parse_oc_datetime(df["개점시간"])
+  df["마감시간"] = parse_oc_datetime(df["마감시간"])
+
+  df["매장코드"] = (
+      df["매장코드"].astype("string").str.replace(r"\.0$", "", regex=True)
+  )
+  df["매장명"] = df["매장명"].astype("string").str.strip()
+  df["지역"] = df["지역"].astype("string").str.strip().fillna("기타")
+  df["권역"] = df["지역"].apply(oc_map_region_to_area)
+
+  df = df.dropna(subset=["영업일", "매장코드", "매장명"]).copy()
+  df["운영시간_시간"] = (df["마감시간"] - df["개점시간"]).dt.total_seconds() / 3600
+
+  invalid_duration = df["운영시간_시간"] < 0
+  df.loc[invalid_duration, "운영시간_시간"] = np.nan
+
+  weekday_map = {
+      "Monday": "월",
+      "Tuesday": "화",
+      "Wednesday": "수",
+      "Thursday": "목",
+      "Friday": "금",
+      "Saturday": "토",
+      "Sunday": "일",
+  }
+  df["요일"] = df["영업일"].dt.day_name().map(weekday_map)
+  df["개점시각"] = df["개점시간"].dt.strftime("%H:%M").fillna("-")
+  df["마감시각"] = df["마감시간"].dt.strftime("%H:%M").fillna("-")
+  df["운영시간"] = df["운영시간_시간"].apply(oc_format_duration)
+  df["매장키"] = df["매장코드"].astype(str) + " | " + df["매장명"].astype(str)
+  return df
+
+
+def oc_add_anomaly_flags(data, threshold_minutes):
+  result = data.copy()
+  result["개점편차_분"] = np.nan
+  result["마감편차_분"] = np.nan
+  result["이상유형"] = ""
+  result["이상상세"] = ""
+
+  for _, indexes in result.groupby("매장키").groups.items():
+    store_rows = result.loc[indexes]
+    valid = store_rows.dropna(subset=["개점시간", "마감시간"])
+
+    if len(valid) < 3:
+      continue
+
+    avg_open = oc_circular_average_time(valid["개점시간"])
+    avg_close = oc_circular_average_time(valid["마감시간"])
+
+    for idx, row in valid.iterrows():
+      open_diff = oc_circular_difference_minutes(row["개점시간"], avg_open)
+      close_diff = oc_circular_difference_minutes(row["마감시간"], avg_close)
+
+      result.at[idx, "개점편차_분"] = open_diff
+      result.at[idx, "마감편차_분"] = close_diff
+
+      flags = []
+      details = []
+
+      if open_diff >= threshold_minutes:
+        flags.append("늦은 개점")
+        details.append(f"평균보다 {oc_format_deviation(open_diff)}")
+
+      if close_diff <= -threshold_minutes:
+        flags.append("이른 마감")
+        details.append(f"평균보다 {oc_format_deviation(close_diff)}")
+
+      result.at[idx, "이상유형"] = ", ".join(flags)
+      result.at[idx, "이상상세"] = " / ".join(details)
+
+  long_duration_rows = result.index[result["운영시간_시간"] > 24]
+  for idx in long_duration_rows:
+    existing_type = result.at[idx, "이상유형"]
+    existing_detail = result.at[idx, "이상상세"]
+
+    result.at[idx, "이상유형"] = (
+        f"{existing_type}, 운영시간 24시간 초과"
+        if existing_type
+        else "운영시간 24시간 초과"
+    )
+    result.at[idx, "이상상세"] = (
+        f"{existing_detail} / 총운영시간 24시간 초과"
+        if existing_detail
+        else "총운영시간 24시간 초과"
+    )
+
+  result["개점편차"] = result["개점편차_분"].apply(oc_format_deviation)
+  result["마감편차"] = result["마감편차_분"].apply(oc_format_deviation)
+  result["이상 여부"] = np.where(result["이상유형"] != "", "확인 필요", "-")
+  return result
+
+
+def oc_make_summary(data, start_date, end_date):
+  period_days = (end_date - start_date).days + 1
+  rows = []
+
+  for store_key, group in data.groupby("매장키", dropna=False):
+    valid = group.dropna(subset=["개점시간", "마감시간"])
+    operating_days = valid["영업일"].nunique()
+    recorded_days = group["영업일"].nunique()
+    missing_days = max(period_days - recorded_days, 0)
+
+    avg_open = oc_circular_average_time(valid["개점시간"])
+    avg_close = oc_circular_average_time(valid["마감시간"])
+
+    rows.append({
+        "매장키": store_key,
+        "매장코드": group["매장코드"].iloc[0],
+        "매장명": group["매장명"].iloc[0],
+        "지사명": (
+            group["지사명"].mode().iloc[0]
+            if not group["지사명"].mode().empty
+            else "-"
+        ),
+        "권역": (
+            group["권역"].mode().iloc[0]
+            if not group["권역"].mode().empty
+            else "-"
+        ),
+        "지역": (
+            group["지역"].mode().iloc[0]
+            if not group["지역"].mode().empty
+            else "-"
+        ),
+        "영업일수": operating_days,
+        "휴무/미기록일": missing_days,
+        "평균 개점시간": oc_format_time(avg_open),
+        "평균 마감시간": oc_format_time(avg_close),
+        "평균 운영시간": oc_format_duration(valid["운영시간_시간"].mean()),
+        "이상 영업 건수": int((group["이상유형"] != "").sum()),
+        "기록일수": recorded_days,
+    })
+
+  return (
+      pd.DataFrame(rows)
+      .sort_values(["권역", "지역", "매장명"])
+      .reset_index(drop=True)
+  )
+
+
+def oc_make_time_by_group(data, group_cols):
+  rows = []
+  for keys, group in data.groupby(group_cols, dropna=False):
+    if not isinstance(keys, tuple):
+      keys = (keys,)
+    valid = group.dropna(subset=["개점시간", "마감시간"])
+    avg_open = oc_circular_average_time(valid["개점시간"])
+    avg_close = oc_circular_average_time(valid["마감시간"])
+
+    row = dict(zip(group_cols, keys))
+    row.update({
+        "매장수": group["매장키"].nunique(),
+        "유효 기록건수": len(valid),
+        "평균 개점시간": oc_format_time(avg_open),
+        "평균 마감시간": oc_format_time(avg_close),
+        "평균 운영시간": oc_format_duration(valid["운영시간_시간"].mean()),
+        "_개점_분": oc_time_minutes(avg_open) if avg_open is not None else np.nan,
+        "_마감_분": (
+            oc_time_minutes(avg_close) if avg_close is not None else np.nan
+        ),
+    })
+    rows.append(row)
+
+  df_out = pd.DataFrame(rows)
+  if df_out.empty:
+    return df_out
+  return df_out.sort_values(group_cols).reset_index(drop=True)
+
+
+@st.cache_data
+def load_open_close_data(file_bytes):
+  excel = pd.ExcelFile(io.BytesIO(file_bytes))
+  preferred_sheet = "개점_마감현황"
+  sheet_name = (
+      preferred_sheet if preferred_sheet in excel.sheet_names else excel.sheet_names[0]
+  )
+  raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name)
+  return oc_prepare_data(raw)
+
+
 WON_FORMAT = "₩%,d"
 
 # -------------------------------------------------------------
 # [탭 메뉴 구성]
 # -------------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 매출 및 휴무일 대시보드",
     "🍗 메뉴별 판매 분석 대시보드",
     "🛵 채널/플랫폼 심층 분석 대시보드",
     "📈 월별 매출 증감률 추이",
     "📅 주차별·플랫폼별 분석",
+    "⏰ 매장 영업현황(개점·마감)",
 ])
 
 # =============================================================
@@ -775,7 +1075,7 @@ with tab1:
       st.error(f"탭 1 오류 발생: {e}")
 
 # =============================================================
-# [TAB 2] 메뉴별 판매 대시보드 (수정 반영)
+# [TAB 2] 메뉴별 판매 대시보드
 # =============================================================
 with tab2:
   st.header("🍗 꾸브라꼬 핵심 지표 및 판매비율 분석")
@@ -808,7 +1108,6 @@ with tab2:
           data2["실매출액"], errors="coerce"
       ).fillna(0)
 
-      # 형태 분류 생성
       data2["주력메뉴분류"] = data2["메뉴명"].apply(get_target_chicken)
       data2["메뉴형태"] = data2.apply(
           lambda x: get_menu_type(x["메뉴명"], x["실매출액"]), axis=1
@@ -817,9 +1116,6 @@ with tab2:
           lambda x: get_bone_type(x["메뉴명"], x["메뉴형태"]), axis=1
       )
 
-      # ==========================================
-      # 1. 핵심 주력 메뉴 판매 비율
-      # ==========================================
       st.markdown("---")
       st.header("🏆 1. 핵심 주력 메뉴 판매 비율")
 
@@ -860,9 +1156,6 @@ with tab2:
             },
         )
 
-      # ==========================================
-      # 2. 세트 vs 단품 판매 비율 (주문 건수 기준 / 금액 제외)
-      # ==========================================
       st.markdown("---")
       st.header("🍔 2. 세트 vs 단품 판매 비율 (주문 건수 기준)")
       st.caption(
@@ -904,9 +1197,6 @@ with tab2:
             },
         )
 
-      # ==========================================
-      # 3. 사이드 제품 판매 비율
-      # ==========================================
       st.markdown("---")
       st.header("🍟 3. 사이드 메뉴 판매 비율")
 
@@ -949,9 +1239,6 @@ with tab2:
             },
         )
 
-      # ==========================================
-      # 4. 뼈 vs 순살 선호도 (마리 수 기준 완벽 역산)
-      # ==========================================
       st.markdown("---")
       st.header("🦴 4. 뼈 vs 순살 선호도 (치킨 '마리(Piece)' 기준)")
       st.caption(
@@ -1573,10 +1860,6 @@ with tab4:
             },
         )
 
-        # -----------------------------------------------------
-        # 매장별 월별 매출 및 전월 대비 증감금액·증감률
-        # (전체 / 양수 / 음수 / 권역별 선택 / 지역별 선택 탭)
-        # -----------------------------------------------------
         st.markdown("---")
         st.subheader("📋 매장별 월별 매출 및 전월 대비 증감금액·증감률")
 
@@ -2404,3 +2687,523 @@ with tab5:
         "위에서 분석할 엑셀 파일(.xlsx)을 업로드해주세요. (매장별 파일,"
         " 주문경로별 파일 개별 또는 동시 업로드 가능)"
     )
+
+# =============================================================
+# [TAB 6] 매장 영업현황(개점·마감시간 / 이상 영업 확인)
+# =============================================================
+with tab6:
+  st.header("⏰ 꾸브라꼬 매장 영업현황 (개점·마감시간)")
+  st.caption(
+      "매장별·지역별·권역별 영업일, 평균 개점/마감시간 및 이상 영업 패턴"
+      " 대시보드"
+  )
+
+  uploaded_file_tab6 = st.file_uploader(
+      "개점·마감현황 엑셀 파일 업로드",
+      type=["xlsx", "xls"],
+      key="upload_tab6",
+  )
+
+  if uploaded_file_tab6 is None:
+    st.info("위에서 개점·마감현황 엑셀 파일을 업로드해 주세요.")
+    st.markdown(
+        """
+        **사용 방법**
+1. `개점_마감현황` 시트가 포함된 엑셀 파일을 업로드합니다.
+2. 조회 기간, 권역 및 지역을 선택합니다.
+3. 하위 탭에서 전체 요약, 지역별 평균 개점·마감시간, 매장별 상세, 이상 영업을 확인합니다.
+        """
+    )
+  else:
+    try:
+      df_oc = load_open_close_data(uploaded_file_tab6.getvalue())
+
+      if df_oc.empty:
+        st.warning("분석할 수 있는 매장 데이터가 없습니다.")
+      else:
+        oc_min = df_oc["영업일"].min().date()
+        oc_max = df_oc["영업일"].max().date()
+
+        st.markdown("---")
+        st.subheader("조회 조건")
+        fc6_1, fc6_2, fc6_3, fc6_4 = st.columns([1.5, 1.3, 1.3, 1.4])
+
+        with fc6_1:
+          date_range_oc = st.date_input(
+              "조회 기간",
+              value=(oc_min, oc_max),
+              min_value=oc_min,
+              max_value=oc_max,
+              key="tab6_date_range",
+          )
+
+        if isinstance(date_range_oc, (tuple, list)):
+          if len(date_range_oc) == 2:
+            oc_start, oc_end = date_range_oc
+          else:
+            oc_start = oc_end = date_range_oc[0]
+        else:
+          oc_start = oc_end = date_range_oc
+
+        if oc_start > oc_end:
+          st.error("조회 시작일이 종료일보다 늦습니다.")
+        else:
+          avail_oc_areas = [
+              a for a in OPEN_CLOSE_AREA_ORDER if a in df_oc["권역"].unique()
+          ] + sorted(
+              [a for a in df_oc["권역"].unique() if a not in OPEN_CLOSE_AREA_ORDER]
+          )
+
+          with fc6_2:
+            sel_oc_areas = st.multiselect(
+                "권역 선택",
+                avail_oc_areas,
+                default=avail_oc_areas,
+                key="tab6_areas",
+            )
+
+          reg_candidates_oc = sorted(
+              df_oc[df_oc["권역"].isin(sel_oc_areas)]["지역"]
+              .dropna()
+              .astype(str)
+              .unique()
+              .tolist()
+          )
+          with fc6_3:
+            sel_oc_regions = st.multiselect(
+                "지역 선택",
+                reg_candidates_oc,
+                default=reg_candidates_oc,
+                key="tab6_regions",
+            )
+
+          with fc6_4:
+            threshold_hours_oc = st.slider(
+                "이상 영업 판단 기준 (시간)",
+                min_value=0.5,
+                max_value=4.0,
+                value=2.0,
+                step=0.5,
+                help=(
+                    "매장별 평균 개점/마감 시각에서 설정한 시간 이상 차이가"
+                    " 나면 확인 대상으로 표시합니다."
+                ),
+                key="tab6_threshold",
+            )
+
+          threshold_minutes_oc = int(threshold_hours_oc * 60)
+
+          filtered_oc = df_oc[
+              (df_oc["영업일"].dt.date >= oc_start)
+              & (df_oc["영업일"].dt.date <= oc_end)
+              & (df_oc["권역"].isin(sel_oc_areas))
+              & (df_oc["지역"].astype(str).isin(sel_oc_regions))
+          ].copy()
+
+          if filtered_oc.empty:
+            st.warning("선택한 조건에 해당하는 데이터가 없습니다.")
+          else:
+            filtered_oc = oc_add_anomaly_flags(
+                filtered_oc, threshold_minutes_oc
+            )
+            summary_oc = oc_make_summary(filtered_oc, oc_start, oc_end)
+            period_days_oc = (oc_end - oc_start).days + 1
+
+            st.markdown("---")
+            st6_1, st6_2, st6_3, st6_4 = st.tabs([
+                "📊 전체 매장 요약",
+                "⏰ 지역별 개점·마감시간",
+                "🔎 매장별 상세 조회",
+                "🚨 이상 영업 확인",
+            ])
+
+            with st6_1:
+              st.subheader("전체 매장 영업현황")
+              c1, c2, c3, c4 = st.columns(4)
+              c1.metric("조회 매장 수", f"{len(summary_oc):,}개")
+              c2.metric("조회 기간", f"{period_days_oc:,}일")
+              c3.metric(
+                  "정상 시간 기록",
+                  f"{len(filtered_oc.dropna(subset=['개점시간', '마감시간'])):,}건",
+              )
+              c4.metric(
+                  "이상 영업 건수",
+                  f"{int((filtered_oc['이상유형'] != '').sum()):,}건",
+              )
+
+              st.markdown("#### 매장별 영업 요약")
+              st.caption(
+                  "휴무/미기록일은 조회 기간 중 매장 기록이 없는 날짜입니다. "
+                  "실제 휴무와 데이터 누락은 원본 자료만으로 구분할 수 없습니다. "
+                  f"이상 영업은 매장별 평균 시각에서 {threshold_hours_oc:.1f}시간"
+                  " 이상 차이가 난 경우입니다."
+              )
+
+              display_cols_oc = [
+                  "매장명",
+                  "권역",
+                  "지역",
+                  "영업일수",
+                  "휴무/미기록일",
+                  "평균 개점시간",
+                  "평균 마감시간",
+                  "평균 운영시간",
+                  "이상 영업 건수",
+              ]
+              selection_oc = st.dataframe(
+                  summary_oc[display_cols_oc],
+                  use_container_width=True,
+                  hide_index=True,
+                  on_select="rerun",
+                  selection_mode="single-row",
+                  key="tab6_summary_table",
+              )
+
+              chosen_key_oc = None
+              try:
+                selected_rows_oc = selection_oc.selection.rows
+                if selected_rows_oc:
+                  chosen_key_oc = summary_oc.iloc[selected_rows_oc[0]]["매장키"]
+              except Exception:
+                pass
+
+              store_keys_oc = summary_oc["매장키"].tolist()
+              default_idx_oc = (
+                  store_keys_oc.index(chosen_key_oc)
+                  if chosen_key_oc in store_keys_oc
+                  else 0
+              )
+              chosen_key_oc = st.selectbox(
+                  "상세 내용을 확인할 매장",
+                  options=store_keys_oc,
+                  index=default_idx_oc,
+                  format_func=lambda key: summary_oc.loc[
+                      summary_oc["매장키"] == key, "매장명"
+                  ].iloc[0],
+                  key="tab6_overview_store_select",
+              )
+
+              if st.button("선택 매장 상세 보기", type="primary", key="tab6_go_detail"):
+                st.session_state["tab6_detail_store_key"] = chosen_key_oc
+                st.success(
+                    "상단의 '매장별 상세 조회' 탭에서 선택 매장의 내역을 확인해"
+                    " 주세요."
+                )
+
+              st.markdown("#### 매장별 이상 영업 건수")
+              anomaly_summary_oc = summary_oc[
+                  summary_oc["이상 영업 건수"] > 0
+              ].sort_values("이상 영업 건수", ascending=False)
+              if anomaly_summary_oc.empty:
+                st.success("현재 설정한 기준에 해당하는 이상 영업 기록이 없습니다.")
+              else:
+                st.dataframe(
+                    anomaly_summary_oc[
+                        ["매장명", "권역", "지역", "이상 영업 건수"]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            with st6_2:
+              st.subheader("권역별·지역별 평균 개점시간 및 마감시간")
+              st.caption(
+                  "권역 구분 — 수도권: 중부권, 강원권, 경기권, 수도권 / 영남권:"
+                  " 경상, 경북, 부산 / 호남권: 전남, 전북, 광주"
+              )
+
+              area_df_oc = oc_make_time_by_group(filtered_oc, ["권역"])
+              region_df_oc = oc_make_time_by_group(filtered_oc, ["권역", "지역"])
+
+              st.markdown("#### 📌 권역별 평균 개점·마감시간")
+              if area_df_oc.empty:
+                st.info("표시할 권역 데이터가 없습니다.")
+              else:
+                st.dataframe(
+                    area_df_oc[[
+                        "권역",
+                        "매장수",
+                        "유효 기록건수",
+                        "평균 개점시간",
+                        "평균 마감시간",
+                        "평균 운영시간",
+                    ]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+              st.markdown("#### 📍 지역별 평균 개점·마감시간")
+              if region_df_oc.empty:
+                st.info("표시할 지역 데이터가 없습니다.")
+              else:
+                st.dataframe(
+                    region_df_oc[[
+                        "권역",
+                        "지역",
+                        "매장수",
+                        "유효 기록건수",
+                        "평균 개점시간",
+                        "평균 마감시간",
+                        "평균 운영시간",
+                    ]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                chart_df_oc = (
+                    region_df_oc.set_index("지역")[["_개점_분", "_마감_분"]]
+                    / 60.0
+                )
+                chart_df_oc.columns = ["평균 개점시각(시)", "평균 마감시각(시)"]
+                st.markdown("#### 지역별 평균 개점·마감 시각 비교 (시간 단위)")
+                st.bar_chart(chart_df_oc)
+
+                st.download_button(
+                    "지역별 평균 개점·마감시간 CSV 다운로드",
+                    data=region_df_oc[[
+                        "권역",
+                        "지역",
+                        "매장수",
+                        "유효 기록건수",
+                        "평균 개점시간",
+                        "평균 마감시간",
+                        "평균 운영시간",
+                    ]]
+                    .to_csv(index=False, encoding="utf-8-sig")
+                    .encode("utf-8-sig"),
+                    file_name="지역별_평균_개점마감시간.csv",
+                    mime="text/csv",
+                    key="tab6_dl_region",
+                )
+
+            with st6_3:
+              st.subheader("매장별 상세 영업현황")
+              store_keys_oc = summary_oc["매장키"].tolist()
+              default_key_oc = st.session_state.get(
+                  "tab6_detail_store_key", store_keys_oc[0]
+              )
+              if default_key_oc not in store_keys_oc:
+                default_key_oc = store_keys_oc[0]
+
+              detail_key_oc = st.selectbox(
+                  "매장 선택",
+                  options=store_keys_oc,
+                  index=store_keys_oc.index(default_key_oc),
+                  format_func=lambda key: summary_oc.loc[
+                      summary_oc["매장키"] == key, "매장명"
+                  ].iloc[0],
+                  key="tab6_detail_store_select",
+              )
+
+              detail_oc = (
+                  filtered_oc[filtered_oc["매장키"] == detail_key_oc]
+                  .sort_values("영업일")
+                  .copy()
+              )
+              store_summary_oc = summary_oc[
+                  summary_oc["매장키"] == detail_key_oc
+              ].iloc[0]
+
+              a, b, c, d = st.columns(4)
+              a.metric("영업일수", f"{int(store_summary_oc['영업일수'])}일")
+              b.metric(
+                  "휴무/미기록일", f"{int(store_summary_oc['휴무/미기록일'])}일"
+              )
+              c.metric("평균 개점", store_summary_oc["평균 개점시간"])
+              d.metric("평균 마감", store_summary_oc["평균 마감시간"])
+
+              st.markdown("#### 일자별 영업시간 및 평균 대비 편차")
+              detail_table_oc = detail_oc[[
+                  "영업일",
+                  "요일",
+                  "개점시각",
+                  "마감시각",
+                  "운영시간",
+                  "개점편차",
+                  "마감편차",
+                  "이상 여부",
+                  "이상유형",
+              ]].copy()
+              detail_table_oc["영업일"] = detail_table_oc[
+                  "영업일"
+              ].dt.strftime("%Y-%m-%d")
+              detail_table_oc.columns = [
+                  "영업일",
+                  "요일",
+                  "개점시간",
+                  "마감시간",
+                  "총운영시간",
+                  "개점 편차",
+                  "마감 편차",
+                  "확인 상태",
+                  "이상 유형",
+              ]
+              st.dataframe(
+                  detail_table_oc, use_container_width=True, hide_index=True
+              )
+
+              st.markdown("#### 확인이 필요한 날짜")
+              detail_alerts_oc = detail_oc[detail_oc["이상유형"] != ""].copy()
+              if detail_alerts_oc.empty:
+                st.success(
+                    "설정한 기준을 초과한 늦은 개점 또는 이른 마감이 없습니다."
+                )
+              else:
+                alert_view_oc = detail_alerts_oc[[
+                    "영업일",
+                    "요일",
+                    "개점시각",
+                    "마감시각",
+                    "이상유형",
+                    "이상상세",
+                ]].copy()
+                alert_view_oc["영업일"] = alert_view_oc["영업일"].dt.strftime(
+                    "%Y-%m-%d"
+                )
+                alert_view_oc.columns = [
+                    "영업일",
+                    "요일",
+                    "개점시간",
+                    "마감시간",
+                    "이상 유형",
+                    "상세 내용",
+                ]
+                st.dataframe(
+                    alert_view_oc, use_container_width=True, hide_index=True
+                )
+
+              st.markdown("#### 날짜별 영업 기록")
+              daily_records_oc = {
+                  row["영업일"].date(): row for _, row in detail_oc.iterrows()
+              }
+              calendar_days_oc = pd.date_range(oc_start, oc_end, freq="D")
+              calendar_rows_oc = []
+
+              for day in calendar_days_oc:
+                record = daily_records_oc.get(day.date())
+                if record is None:
+                  status, opening, closing, duration = "기록 없음", "-", "-", "-"
+                elif pd.isna(record["개점시간"]) or pd.isna(record["마감시간"]):
+                  status, opening, closing, duration = (
+                      "시간 누락",
+                      record["개점시각"],
+                      record["마감시각"],
+                      "-",
+                  )
+                else:
+                  status = "확인 필요" if record["이상유형"] else "영업"
+                  opening = record["개점시각"]
+                  closing = record["마감시각"]
+                  duration = record["운영시간"]
+
+                calendar_rows_oc.append({
+                    "날짜": day.strftime("%m/%d"),
+                    "요일": ["월", "화", "수", "목", "금", "토", "일"][
+                        day.weekday()
+                    ],
+                    "상태": status,
+                    "개점": opening,
+                    "마감": closing,
+                    "운영시간": duration,
+                })
+
+              st.dataframe(
+                  pd.DataFrame(calendar_rows_oc),
+                  use_container_width=True,
+                  hide_index=True,
+              )
+
+              valid_detail_oc = (
+                  detail_oc.dropna(subset=["운영시간_시간"])
+                  .set_index("영업일")["운영시간_시간"]
+                  .sort_index()
+              )
+              if not valid_detail_oc.empty:
+                st.markdown("#### 일별 운영시간 추이")
+                st.bar_chart(valid_detail_oc, y_label="운영시간(시간)")
+
+              st.download_button(
+                  "상세 내역 CSV 다운로드",
+                  data=detail_table_oc.to_csv(
+                      index=False, encoding="utf-8-sig"
+                  ).encode("utf-8-sig"),
+                  file_name=f"{store_summary_oc['매장명']}_영업현황.csv",
+                  mime="text/csv",
+                  key="tab6_dl_detail",
+              )
+
+            with st6_4:
+              st.subheader("이상 영업 기록")
+              st.caption(
+                  "각 매장의 평균 개점/마감 시각을 기준으로"
+                  f" {threshold_hours_oc:.1f}시간 이상 차이가 난 기록입니다."
+                  " 매장 운영 특성이나 사전 공지된 일정에 따른 정상적인"
+                  " 변동일 수도 있으므로 확인용 지표로 활용해 주세요."
+              )
+
+              alerts_oc = filtered_oc[filtered_oc["이상유형"] != ""].copy()
+              if alerts_oc.empty:
+                st.success(
+                    "현재 조회 조건에서 확인이 필요한 이상 영업 기록이 없습니다."
+                )
+              else:
+                late_open_count = int(
+                    alerts_oc["이상유형"].str.contains("늦은 개점").sum()
+                )
+                early_close_count = int(
+                    alerts_oc["이상유형"].str.contains("이른 마감").sum()
+                )
+                over_24h_count = int(
+                    (alerts_oc["운영시간_시간"] > 24).sum()
+                )
+
+                x1, x2, x3, x4 = st.columns(4)
+                x1.metric("확인 대상 기록", f"{len(alerts_oc):,}건")
+                x2.metric("평균보다 늦은 개점", f"{late_open_count:,}건")
+                x3.metric("평균보다 이른 마감", f"{early_close_count:,}건")
+                x4.metric("24시간 초과 운영", f"{over_24h_count:,}건")
+
+                alert_table_oc = alerts_oc[[
+                    "영업일",
+                    "매장명",
+                    "권역",
+                    "지역",
+                    "개점시각",
+                    "마감시각",
+                    "이상유형",
+                    "이상상세",
+                ]].copy()
+                alert_table_oc["영업일"] = alert_table_oc[
+                    "영업일"
+                ].dt.strftime("%Y-%m-%d")
+                alert_table_oc.columns = [
+                    "영업일",
+                    "매장명",
+                    "권역",
+                    "지역",
+                    "개점시간",
+                    "마감시간",
+                    "이상 유형",
+                    "편차 상세",
+                ]
+                st.dataframe(
+                    alert_table_oc, use_container_width=True, hide_index=True
+                )
+
+                st.download_button(
+                    "이상 영업 기록 CSV 다운로드",
+                    data=alert_table_oc.to_csv(
+                        index=False, encoding="utf-8-sig"
+                    ).encode("utf-8-sig"),
+                    file_name="이상영업_확인목록.csv",
+                    mime="text/csv",
+                    key="tab6_dl_alerts",
+                )
+
+    except Exception as exc:
+      st.error(f"탭 6 오류 발생: {exc}")
+
+  st.markdown("---")
+  st.caption(
+      "분석 기준 안내: 평균 시각은 24시간 기준 원형 평균 | 권역: 수도권(중부권·강원권·경기권·수도권), 영남권(경상·경북·부산), 호남권(전남·전북·광주) | 늦은 개점/이른 마감은 매장별 평균 개점·마감 시각 대비 설정 시간 이상 차이 기준 | 기준 평균은 유효 기록 3일 이상 매장에 적용 | 기록 없는 날짜는 '기록 없음'으로 표시"
+  )
