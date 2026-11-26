@@ -1220,15 +1220,6 @@ with tab4:
             ),
             axis=1,
         )
-        seq_sales["매출_표기"] = seq_sales["매출"].apply(lambda v: f"₩{v:,.0f}")
-        seq_sales["증감률_표기"] = seq_sales.apply(
-            lambda r: (
-                "기준월"
-                if pd.isna(r["증감률(%)"])
-                else f"{r['증가/하락']} {r['증감률(%)']:+.1f}%"
-            ),
-            axis=1,
-        )
 
         st.markdown("---")
         st.subheader(
@@ -1329,7 +1320,7 @@ with tab4:
         )
 
         # -----------------------------------------------------
-        # 매장별 월별 매출 및 전월 대비 증감금액·증감률 (양수/음수 탭 분리)
+        # 매장별 월별 매출 및 전월 대비 증감금액·증감률 (전체/양수/음수 탭)
         # -----------------------------------------------------
         st.markdown("---")
         st.subheader("📋 매장별 월별 매출 및 전월 대비 증감금액·증감률")
@@ -1415,10 +1406,24 @@ with tab4:
               r_col, format="%+.1f%%"
           )
 
-        pos_tab, neg_tab = st.tabs([
+        all_tab, pos_tab, neg_tab = st.tabs([
+            "📋 전체 매장",
             "📈 양수 매장 (증가)",
             "📉 음수 매장 (하락)",
         ])
+
+        with all_tab:
+          all_df = summary_table.sort_values(
+              by=compare_col_t4, ascending=False, na_position="last"
+          )
+          st.caption(f"전체 매장: {len(all_df)}개")
+          st.dataframe(
+              all_df,
+              use_container_width=True,
+              hide_index=True,
+              height=500,
+              column_config=col_cfg_t4,
+          )
 
         with pos_tab:
           pos_df = summary_table[
